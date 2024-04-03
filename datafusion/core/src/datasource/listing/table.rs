@@ -678,6 +678,7 @@ impl TableProvider for ListingTable {
                     projection: projection.cloned(),
                     limit,
                     output_ordering: self.try_create_output_ordering()?,
+                    output_ordering_ignore_multi_file_groups: state.config().options().optimizer.ignore_multi_file_groups,
                     table_partition_cols,
                 },
                 filters.as_ref(),

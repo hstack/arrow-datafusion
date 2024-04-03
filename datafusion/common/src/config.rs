@@ -571,6 +571,10 @@ config_namespace! {
         /// when an exact selectivity cannot be determined. Valid values are
         /// between 0 (no selectivity) and 100 (all rows are selected).
         pub default_filter_selectivity: u8, default = 20
+
+        /// keep output_ordering even when the groups have multiple files
+        /// see get_projected_output_ordering()
+        pub ignore_multi_file_groups: bool, default = false
     }
 }
 

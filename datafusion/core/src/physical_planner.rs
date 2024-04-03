@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::datasource::file_format::arrow::ArrowFormat;
@@ -557,6 +558,7 @@ impl DefaultPhysicalPlanner {
                     ..
                 }) => {
                     let source = source_as_provider(source)?;
+
                     // Remove all qualifiers from the scan as the provider
                     // doesn't know (nor should care) how the relation was
                     // referred to in the query
@@ -1594,6 +1596,7 @@ pub fn create_window_expr_with_name(
                         window_frame.start_bound, window_frame.end_bound
                     );
             }
+            let tmp_lex_ordering:Vec<PhysicalSortExpr> = vec![];
 
             let window_frame = Arc::new(window_frame.clone());
             let ignore_nulls = null_treatment

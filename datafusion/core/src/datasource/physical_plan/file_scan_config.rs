@@ -96,6 +96,8 @@ pub struct FileScanConfig {
     pub table_partition_cols: Vec<Field>,
     /// All equivalent lexicographical orderings that describe the schema.
     pub output_ordering: Vec<LexOrdering>,
+    /// keep the output ordering even if we have multi file groups
+    pub output_ordering_ignore_multi_file_groups: bool
 }
 
 impl FileScanConfig {

@@ -165,6 +165,7 @@ pub(crate) mod test_util {
                     limit,
                     table_partition_cols: vec![],
                     output_ordering: vec![],
+                    output_ordering_ignore_multi_file_groups: state.config().options().optimizer.ignore_multi_file_groups
                 },
                 None,
             )

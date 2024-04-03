@@ -271,6 +271,10 @@ pub struct ArrowReadOptions<'a> {
 
     /// Partition Columns
     pub table_partition_cols: Vec<(String, DataType)>,
+
+    /// File sort ordering
+    pub file_sort_order: Vec<Vec<Expr>>,
+
 }
 
 impl<'a> Default for ArrowReadOptions<'a> {
@@ -279,6 +283,7 @@ impl<'a> Default for ArrowReadOptions<'a> {
             schema: None,
             file_extension: DEFAULT_ARROW_EXTENSION,
             table_partition_cols: vec![],
+            file_sort_order: vec![],
         }
     }
 }
@@ -605,6 +610,7 @@ impl ReadOptions<'_> for ArrowReadOptions<'_> {
             .with_file_extension(self.file_extension)
             .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
+            .with_file_sort_order(self.file_sort_order.clone())
     }
 
     async fn get_resolved_schema(

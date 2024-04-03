@@ -112,6 +112,7 @@ pub async fn from_substrait_rel(
                         limit: None,
                         table_partition_cols: vec![],
                         output_ordering: vec![],
+                        output_ordering_ignore_multi_file_groups: false,
                     };
 
                     if let Some(MaskExpression { select, .. }) = &read.projection {

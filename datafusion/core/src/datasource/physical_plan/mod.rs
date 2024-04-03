@@ -451,7 +451,8 @@ fn get_projected_output_ordering(
 ) -> Vec<Vec<PhysicalSortExpr>> {
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
-        if base_config.file_groups.iter().any(|group| group.len() > 1) {
+        if base_config.file_groups.iter().any(|group| group.len() > 1)
+            && !base_config.output_ordering_ignore_multi_file_groups {
             debug!("Skipping specified output ordering {:?}. Some file group had more than one file: {:?}",
             base_config.output_ordering[0], base_config.file_groups);
             return vec![];
