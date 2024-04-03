@@ -937,6 +937,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<GetFieldAccess> {
         let field = match expr.clone() {
+            SQLExpr::Identifier(ident) => GetFieldAccess::NamedStructField {
+                name: ScalarValue::from(ident.value),
+            },
             SQLExpr::Value(
                 Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
             ) => GetFieldAccess::NamedStructField {
