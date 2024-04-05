@@ -172,6 +172,7 @@ async fn get_listing_table(
                 Arc::new(RuntimeEnv::default()),
             ),
             table_path,
+            None,
         )
         .await
         .unwrap();

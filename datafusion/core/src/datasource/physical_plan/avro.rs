@@ -270,7 +270,7 @@ mod tests {
         let meta = local_unpartitioned_file(filename);
 
         let file_schema = AvroFormat {}
-            .infer_schema(&state, &store, &[meta.clone()])
+            .infer_schema(&state, &store, &[meta.clone()], None)
             .await?;
 
         let avro_exec = AvroExec::new(FileScanConfig {
@@ -282,6 +282,7 @@ mod tests {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
+            column_hints: None,
         });
         assert_eq!(
             avro_exec
@@ -340,7 +341,7 @@ mod tests {
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let actual_schema = AvroFormat {}
-            .infer_schema(&state, &object_store, &[meta.clone()])
+            .infer_schema(&state, &object_store, &[meta.clone()], None)
             .await?;
 
         let mut builder = SchemaBuilder::from(actual_schema.fields());
@@ -359,6 +360,7 @@ mod tests {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
+            column_hints: None,
         });
         assert_eq!(
             avro_exec
@@ -418,7 +420,7 @@ mod tests {
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let file_schema = AvroFormat {}
-            .infer_schema(&state, &object_store, &[meta.clone()])
+            .infer_schema(&state, &object_store, &[meta.clone()], None)
             .await?;
 
         let mut partitioned_file = PartitionedFile::from(meta);
@@ -435,6 +437,7 @@ mod tests {
             limit: None,
             table_partition_cols: vec![Field::new("date", DataType::Utf8, false)],
             output_ordering: vec![],
+            column_hints: None,
         });
         assert_eq!(
             avro_exec

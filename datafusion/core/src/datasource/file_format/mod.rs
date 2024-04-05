@@ -67,6 +67,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
+        column_hints: Option<Vec<String>>,
     ) -> Result<SchemaRef>;
 
     /// Infer the statistics for the provided object. The cost and accuracy of the
@@ -140,7 +141,7 @@ pub(crate) mod test_util {
         let store = Arc::new(LocalFileSystem::new()) as _;
         let meta = local_unpartitioned_file(format!("{store_root}/{file_name}"));
 
-        let file_schema = format.infer_schema(state, &store, &[meta.clone()]).await?;
+        let file_schema = format.infer_schema(state, &store, &[meta.clone()], None).await?;
 
         let statistics = format
             .infer_stats(state, &store, file_schema.clone(), &meta)
@@ -165,6 +166,7 @@ pub(crate) mod test_util {
                     limit,
                     table_partition_cols: vec![],
                     output_ordering: vec![],
+                    column_hints: None,
                 },
                 None,
             )

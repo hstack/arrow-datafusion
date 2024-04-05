@@ -203,6 +203,7 @@ impl FileFormat for CsvFormat {
         _state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
+        _columns: Option<Vec<String>>,
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
 
@@ -675,6 +676,7 @@ mod tests {
                 &state,
                 &(variable_object_store.clone() as Arc<dyn ObjectStore>),
                 &[object_meta],
+                None,
             )
             .await?;
 

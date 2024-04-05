@@ -549,6 +549,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         limit: None,
         table_partition_cols: vec![],
         output_ordering: vec![],
+        column_hints: None,
     };
 
     let predicate = Arc::new(BinaryExpr::new(
@@ -585,6 +586,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
             false,
         )],
         output_ordering: vec![],
+        column_hints: None,
     };
 
     roundtrip_test(Arc::new(ParquetExec::new(

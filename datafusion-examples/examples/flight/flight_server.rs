@@ -59,7 +59,7 @@ impl FlightService for FlightServiceImpl {
 
         let ctx = SessionContext::new();
         let schema = listing_options
-            .infer_schema(&ctx.state(), &table_path)
+            .infer_schema(&ctx.state(), &table_path, None)
             .await
             .unwrap();
 

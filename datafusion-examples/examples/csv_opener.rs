@@ -67,6 +67,7 @@ async fn main() -> Result<()> {
         limit: Some(5),
         table_partition_cols: vec![],
         output_ordering: vec![],
+        column_hints: None,
     };
 
     let result =

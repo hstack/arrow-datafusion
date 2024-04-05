@@ -131,7 +131,7 @@ async fn setup_context(object_store: Arc<dyn ObjectStore>) -> SessionContext {
         // make sure we actually find the data
         let path = format!("data://my_store/{table_name}/");
         let schema2 = options
-            .infer_schema(&context.state(), &ListingTableUrl::parse(&path).unwrap())
+            .infer_schema(&context.state(), &ListingTableUrl::parse(&path).unwrap(), None)
             .await
             .unwrap();
         assert_eq!(schema2, schema());
