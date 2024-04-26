@@ -118,19 +118,20 @@ fn scalar_function_type_from_str(
     name: &str,
 ) -> Result<ScalarFunctionType> {
     let s = ctx.state();
-    if let Some(func) = s.scalar_functions().get(name) {
+    let scalar_function = remove_extension(name);
+    if let Some(func) = s.scalar_functions().get(scalar_function) {
         return Ok(ScalarFunctionType::Udf(func.to_owned()));
     }
 
-    if let Ok(op) = name_to_op(name) {
+    if let Ok(op) = name_to_op(scalar_function) {
         return Ok(ScalarFunctionType::Op(op));
     }
 
-    if let Some(builder) = BuiltinExprBuilder::try_from_name(name) {
+    if let Some(builder) = BuiltinExprBuilder::try_from_name(scalar_function) {
         return Ok(ScalarFunctionType::Expr(builder));
     }
 
-    not_impl_err!("Unsupported function name: {name:?}")
+    not_impl_err!("Unsupported function name: {scalar_function:?}")
 }
 
 fn split_eq_and_noneq_join_predicate_with_nulls_equality(
@@ -716,6 +717,14 @@ pub async fn from_substriat_func_args(
     Ok(args)
 }
 
+fn remove_extension(function_name: &str) -> &str {
+    if let Some((fname, _)) = function_name.split_once(':') {
+        fname
+    } else {
+        function_name
+    }
+}
+
 /// Convert Substrait AggregateFunction to DataFusion Expr
 pub async fn from_substrait_agg_func(
     ctx: &SessionContext,
@@ -746,11 +755,7 @@ pub async fn from_substrait_agg_func(
         );
     };
 
-    let agg_function = if let Some((fname, _)) = function_name.split_once(':') {
-        fname
-    } else {
-        function_name.as_str()
-    };
+    let agg_function = remove_extension(function_name);
 
     // try udaf first, then built-in aggr fn.
     if let Ok(fun) = ctx.udaf(agg_function) {
