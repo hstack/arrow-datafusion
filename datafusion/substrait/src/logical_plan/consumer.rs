@@ -746,12 +746,18 @@ pub async fn from_substrait_agg_func(
         );
     };
 
+    let agg_function = if let Some((fname, _)) = function_name.split_once(':') {
+        fname
+    } else {
+        function_name.as_str()
+    };
+
     // try udaf first, then built-in aggr fn.
-    if let Ok(fun) = ctx.udaf(function_name) {
+    if let Ok(fun) = ctx.udaf(agg_function) {
         Ok(Arc::new(Expr::AggregateFunction(
             expr::AggregateFunction::new_udf(fun, args, distinct, filter, order_by, None),
         )))
-    } else if let Ok(fun) = aggregate_function::AggregateFunction::from_str(function_name)
+    } else if let Ok(fun) = aggregate_function::AggregateFunction::from_str(agg_function)
     {
         Ok(Arc::new(Expr::AggregateFunction(
             expr::AggregateFunction::new(fun, args, distinct, filter, order_by, None),
@@ -759,7 +765,7 @@ pub async fn from_substrait_agg_func(
     } else {
         not_impl_err!(
             "Aggregated function {} is not supported: function anchor = {:?}",
-            function_name,
+            agg_function,
             f.function_reference
         )
     }
