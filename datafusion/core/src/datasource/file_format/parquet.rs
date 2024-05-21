@@ -62,9 +62,7 @@ use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
     ArrowLeafColumn,
 };
-use parquet::arrow::{
-    arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
-};
+use parquet::arrow::{arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter, parquet_to_arrow_schema_by_columns, ProjectionMask};
 use parquet::file::footer::{decode_footer, decode_metadata};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
@@ -79,6 +77,7 @@ use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
+use parquet::schema::types::SchemaDescriptor;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -177,9 +176,10 @@ async fn fetch_schema_with_location(
     store: &dyn ObjectStore,
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
+    columns: Option<Vec<String>>
 ) -> Result<(Path, Schema)> {
     let loc_path = file.location.clone();
-    let schema = fetch_schema(store, file, metadata_size_hint).await?;
+    let schema = fetch_schema(store, file, metadata_size_hint, columns).await?;
     Ok((loc_path, schema))
 }
 
@@ -194,13 +194,16 @@ impl FileFormat for ParquetFormat {
         state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
+        columns: Option<Vec<String>>
     ) -> Result<SchemaRef> {
+        let columns = columns.clone();
         let mut schemas: Vec<_> = futures::stream::iter(objects)
             .map(|object| {
                 fetch_schema_with_location(
                     store.as_ref(),
                     object,
                     self.metadata_size_hint(),
+                    columns.clone(),
                 )
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
@@ -433,18 +436,55 @@ pub async fn fetch_parquet_metadata(
     }
 }
 
+/// Returns the index from the schema descriptor for a certain column path
+pub fn find_leaf_id(schema_desc_ptr: &SchemaDescriptor, name: &str) -> Result<usize> {
+    let pos = schema_desc_ptr
+        .columns()
+        .iter()
+        .position(|col| col.path().string() == name);
+
+    pos.ok_or(DataFusionError::Internal(format!("{name} not found")))
+}
+
+/// Returns vector of indices from the schema descriptor for some column paths
+pub fn find_leaf_ids(
+    schema_desc_ptr: &SchemaDescriptor,
+    names: Vec<String>,
+) -> Result<Vec<usize>> {
+    names
+        .iter()
+        // .map(|s| s.as_str())
+        .map(|name| find_leaf_id(schema_desc_ptr, name.as_str()))
+        .collect()
+}
+
 /// Read and parse the schema of the Parquet file at location `path`
 async fn fetch_schema(
     store: &dyn ObjectStore,
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
+    column_hints: Option<Vec<String>>,
 ) -> Result<Schema> {
     let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
     let file_metadata = metadata.file_metadata();
-    let schema = parquet_to_arrow_schema(
-        file_metadata.schema_descr(),
-        file_metadata.key_value_metadata(),
-    )?;
+    let schema = match column_hints {
+        Some(cols) => {
+            let ids = find_leaf_ids(
+                metadata.file_metadata().schema_descr(),
+                cols.clone()
+            )?;
+            let mask = ProjectionMask::leaves(metadata.file_metadata().schema_descr(), ids);
+            parquet_to_arrow_schema_by_columns(
+                file_metadata.schema_descr(),
+                mask,
+                file_metadata.key_value_metadata()
+            )?
+        },
+        _ => parquet_to_arrow_schema(
+            file_metadata.schema_descr(),
+            file_metadata.key_value_metadata(),
+        )?
+    };
     Ok(schema)
 }
 
@@ -1147,7 +1187,7 @@ mod tests {
         let session = SessionContext::new();
         let ctx = session.state();
         let format = ParquetFormat::default();
-        let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
+        let schema = format.infer_schema(&ctx, &store, &meta, None).await.unwrap();
 
         let stats =
             fetch_statistics(store.as_ref(), schema.clone(), &meta[0], None).await?;
@@ -1196,7 +1236,7 @@ mod tests {
         let session = SessionContext::new();
         let ctx = session.state();
         let format = ParquetFormat::default();
-        let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
+        let schema = format.infer_schema(&ctx, &store, &meta, None).await.unwrap();
 
         let order: Vec<_> = ["a", "b", "c", "d"]
             .into_iter()
@@ -1341,7 +1381,7 @@ mod tests {
         let ctx = session.state();
         let format = ParquetFormat::default().with_metadata_size_hint(Some(9));
         let schema = format
-            .infer_schema(&ctx, &store.upcast(), &meta)
+            .infer_schema(&ctx, &store.upcast(), &meta, None)
             .await
             .unwrap();
 
@@ -1371,7 +1411,7 @@ mod tests {
 
         let format = ParquetFormat::default().with_metadata_size_hint(Some(size_hint));
         let schema = format
-            .infer_schema(&ctx, &store.upcast(), &meta)
+            .infer_schema(&ctx, &store.upcast(), &meta, None)
             .await
             .unwrap();
         let stats = fetch_statistics(

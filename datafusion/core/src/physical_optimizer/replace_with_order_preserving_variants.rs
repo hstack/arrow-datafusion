@@ -1503,6 +1503,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: vec![sort_exprs],
+                column_hints: None,
             },
             true,
             0,

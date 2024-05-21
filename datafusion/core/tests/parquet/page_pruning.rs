@@ -54,7 +54,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
     };
 
     let schema = ParquetFormat::default()
-        .infer_schema(state, &store, &[meta.clone()])
+        .infer_schema(state, &store, &[meta.clone()], None)
         .await
         .unwrap();
 
@@ -81,6 +81,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
+            column_hints: None,
         },
         Some(predicate),
         None,

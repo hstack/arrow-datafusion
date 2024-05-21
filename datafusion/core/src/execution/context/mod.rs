@@ -1103,7 +1103,7 @@ impl SessionContext {
         let table_path = ListingTableUrl::parse(table_path)?;
         let resolved_schema = match provided_schema {
             Some(s) => s,
-            None => options.infer_schema(&self.state(), &table_path).await?,
+            None => options.infer_schema(&self.state(), &table_path, options.column_hints.clone()).await?,
         };
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)

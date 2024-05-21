@@ -92,6 +92,7 @@ async fn can_override_schema_adapter() {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
+            column_hints: None, 
         },
         None,
         None,

@@ -91,6 +91,8 @@ pub struct FileScanConfig {
     /// Columns on which to project the data. Indexes that are higher than the
     /// number of columns of `file_schema` refer to `table_partition_cols`.
     pub projection: Option<Vec<usize>>,
+    /// used to pass column load hints to underlying implementation
+    pub column_hints: Option<Vec<String>>,
     /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
@@ -1126,6 +1128,7 @@ mod tests {
             statistics,
             table_partition_cols,
             output_ordering: vec![],
+            column_hints: None,
         }
     }
 

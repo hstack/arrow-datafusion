@@ -206,6 +206,7 @@ pub fn partitioned_csv_config(
         limit: None,
         table_partition_cols: vec![],
         output_ordering: vec![],
+        column_hints: None,
     })
 }
 
@@ -292,6 +293,7 @@ pub fn csv_exec_sorted(
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![sort_exprs],
+            column_hints: None,
         },
         false,
         0,
@@ -354,6 +356,7 @@ pub fn csv_exec_ordered(
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![sort_exprs],
+            column_hints: None,
         },
         true,
         0,

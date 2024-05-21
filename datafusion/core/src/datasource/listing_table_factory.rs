@@ -134,7 +134,7 @@ impl TableProviderFactory for ListingTableFactory {
         options.validate_partitions(state, &table_path).await?;
 
         let resolved_schema = match provided_schema {
-            None => options.infer_schema(state, &table_path).await?,
+            None => options.infer_schema(state, &table_path, None).await?,
             Some(s) => s,
         };
         let config = ListingTableConfig::new(table_path)

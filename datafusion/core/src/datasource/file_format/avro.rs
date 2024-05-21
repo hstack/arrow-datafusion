@@ -49,6 +49,7 @@ impl FileFormat for AvroFormat {
         _state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
+        _columns: Option<Vec<String>>,
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
         for object in objects {

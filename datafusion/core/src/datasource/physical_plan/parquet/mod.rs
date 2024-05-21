@@ -22,6 +22,7 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
+use crate::datasource::file_format::parquet::find_leaf_ids;
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -45,6 +46,7 @@ use crate::{
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
+use arrow_schema::Schema;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 
 use bytes::Bytes;
@@ -429,6 +431,7 @@ impl ExecutionPlan for ParquetExec {
         let opener = ParquetOpener {
             partition_index,
             projection: Arc::from(projection),
+            column_hints: self.base_config.column_hints.clone().map(Arc::new),
             batch_size: ctx.session_config().batch_size(),
             limit: self.base_config.limit,
             predicate: self.predicate.clone(),
@@ -464,6 +467,7 @@ impl ExecutionPlan for ParquetExec {
 struct ParquetOpener {
     partition_index: usize,
     projection: Arc<[usize]>,
+    column_hints: Option<Arc<Vec<String>>>,
     batch_size: usize,
     limit: Option<usize>,
     predicate: Option<Arc<dyn PhysicalExpr>>,
@@ -499,6 +503,7 @@ impl FileOpener for ParquetOpener {
 
         let batch_size = self.batch_size;
         let projection = self.projection.clone();
+        let column_hints = self.column_hints.clone();
         let projected_schema = SchemaRef::from(self.table_schema.project(&projection)?);
         let schema_adapter = self.schema_adapter_factory.create(projected_schema);
         let predicate = self.predicate.clone();
@@ -519,17 +524,42 @@ impl FileOpener for ParquetOpener {
             let mut builder =
                 ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
                     .await?;
+            let mut field_mask: Vec<usize> = vec![];
+            if column_hints.is_some() {
+                let cols = column_hints.unwrap();
+                if cols.len() > 0 {
+                    // let orig_file_schema = builder.schema().clone();
+                    field_mask = find_leaf_ids(
+                        builder.parquet_schema(),
+                        cols.as_ref().to_vec()
+                    )?;
+                    debug!("Using column hints to load file: {:?}", field_mask.clone());
+                }
+            }
 
-            let file_schema = builder.schema().clone();
+            let file_schema: Arc<Schema> = if field_mask.len() > 0 {
+                let orig_file_schema = builder.schema().clone();
+                let filtered = orig_file_schema.fields().filter_leaves(|idx, _| field_mask.contains(&idx));
+                Arc::new(Schema::new(filtered))
+            } else {
+                builder.schema().clone()
+            };
 
-            let (schema_mapping, adapted_projections) =
-                schema_adapter.map_schema(&file_schema)?;
-            // let predicate = predicate.map(|p| reassign_predicate_columns(p, builder.schema(), true)).transpose()?;
+            // println!("file_schema: {:?}", file_schema);
+            let (schema_mapping, adapted_projections) = schema_adapter.map_schema(&file_schema)?;
 
-            let mask = ProjectionMask::roots(
-                builder.parquet_schema(),
-                adapted_projections.iter().cloned(),
-            );
+            let mask: ProjectionMask = if field_mask.len() > 0 {
+                // let orig_file_schema = builder.schema().clone();
+                ProjectionMask::leaves(
+                    builder.parquet_schema(),
+                    field_mask,
+                )
+            } else {
+                ProjectionMask::roots(
+                    builder.parquet_schema(),
+                    adapted_projections.iter().cloned(),
+                )
+            };
 
             // Filter pushdown: evaluate predicates during scan
             if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
@@ -936,6 +966,7 @@ mod tests {
                     limit: None,
                     table_partition_cols: vec![],
                     output_ordering: vec![],
+                    column_hints: None,
                 },
                 predicate,
                 None,
@@ -1594,6 +1625,7 @@ mod tests {
                     limit: None,
                     table_partition_cols: vec![],
                     output_ordering: vec![],
+                    column_hints: None,
                 },
                 None,
                 None,
@@ -1628,7 +1660,7 @@ mod tests {
 
         let store = Arc::new(LocalFileSystem::new()) as _;
         let file_schema = ParquetFormat::default()
-            .infer_schema(&state, &store, &[meta.clone()])
+            .infer_schema(&state, &store, &[meta.clone()], None)
             .await?;
 
         let group_empty = vec![vec![file_range(&meta, 0, 2)]];
@@ -1660,7 +1692,7 @@ mod tests {
         let meta = local_unpartitioned_file(filename);
 
         let schema = ParquetFormat::default()
-            .infer_schema(&state, &store, &[meta.clone()])
+            .infer_schema(&state, &store, &[meta.clone()], None)
             .await
             .unwrap();
 
@@ -1716,6 +1748,7 @@ mod tests {
                     ),
                 ],
                 output_ordering: vec![],
+                column_hints: None,
             },
             None,
             None,
@@ -1784,6 +1817,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: vec![],
+                column_hints: None,
             },
             None,
             None,

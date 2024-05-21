@@ -433,7 +433,7 @@ mod tests {
             .object_meta;
         let schema = JsonFormat::default()
             .with_file_compression_type(file_compression_type.to_owned())
-            .infer_schema(state, &store, &[meta.clone()])
+            .infer_schema(state, &store, &[meta.clone()], None)
             .await
             .unwrap();
 
@@ -530,6 +530,8 @@ mod tests {
                 limit: Some(3),
                 table_partition_cols: vec![],
                 output_ordering: vec![],
+                column_hints: None,
+
             },
             file_compression_type.to_owned(),
         );
@@ -608,6 +610,8 @@ mod tests {
                 limit: Some(3),
                 table_partition_cols: vec![],
                 output_ordering: vec![],
+                column_hints: None,
+
             },
             file_compression_type.to_owned(),
         );
@@ -655,6 +659,8 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: vec![],
+                column_hints: None,
+
             },
             file_compression_type.to_owned(),
         );
@@ -707,6 +713,8 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: vec![],
+                column_hints: None,
+
             },
             file_compression_type.to_owned(),
         );

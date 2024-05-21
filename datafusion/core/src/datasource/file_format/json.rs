@@ -100,6 +100,7 @@ impl FileFormat for JsonFormat {
         _state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
+        _columns: Option<Vec<String>>,
     ) -> Result<SchemaRef> {
         let mut schemas = Vec::new();
         let mut records_to_read = self.options.schema_infer_max_rec;
@@ -421,7 +422,7 @@ mod tests {
         let format = JsonFormat::default().with_schema_infer_max_rec(3);
 
         let file_schema = format
-            .infer_schema(&ctx, &store, &[local_unpartitioned_file(filename)])
+            .infer_schema(&ctx, &store, &[local_unpartitioned_file(filename)], None)
             .await
             .expect("Schema inference");
 

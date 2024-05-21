@@ -197,7 +197,7 @@ impl ListingTableConfig {
         match self.options {
             Some(options) => {
                 let schema = if let Some(url) = self.table_paths.first() {
-                    options.infer_schema(state, url).await?
+                    options.infer_schema(state, url, None).await?
                 } else {
                     Arc::new(Schema::empty())
                 };
@@ -251,6 +251,8 @@ pub struct ListingOptions {
     ///       multiple equivalent orderings, the outer `Vec` will have a
     ///       single element.
     pub file_sort_order: Vec<Vec<Expr>>,
+    /// used to pass column load hints to underlying implementations
+    pub column_hints: Option<Vec<String>>
 }
 
 impl ListingOptions {
@@ -268,6 +270,7 @@ impl ListingOptions {
             collect_stat: true,
             target_partitions: 1,
             file_sort_order: vec![],
+            column_hints: None,
         }
     }
 
@@ -418,6 +421,13 @@ impl ListingOptions {
         self
     }
 
+    ///
+    /// Set column_hints on [`ListingOptions`] and returns self
+    pub fn with_column_hints(mut self, column_hints: Option<Vec<String>>) -> Self {
+        self.column_hints = column_hints;
+        self
+    }
+
     /// Infer the schema of the files at the given path on the provided object store.
     /// The inferred schema does not include the partitioning columns.
     ///
@@ -428,6 +438,7 @@ impl ListingOptions {
         &'a self,
         state: &SessionState,
         table_path: &'a ListingTableUrl,
+        column_hints: Option<Vec<String>>
     ) -> Result<SchemaRef> {
         let store = state.runtime_env().object_store(table_path)?;
 
@@ -437,7 +448,7 @@ impl ListingOptions {
             .try_collect()
             .await?;
 
-        self.format.infer_schema(state, &store, &files).await
+        self.format.infer_schema(state, &store, &files, column_hints).await
     }
 
     /// Infers the partition columns stored in `LOCATION` and compares
@@ -593,7 +604,7 @@ impl ListingOptions {
 ///
 /// // Resolve the schema
 /// let resolved_schema = listing_options
-///    .infer_schema(&session_state, &table_path)
+///    .infer_schema(&session_state, &table_path, None)
 ///    .await?;
 ///
 /// let config = ListingTableConfig::new(table_path)
@@ -811,6 +822,7 @@ impl TableProvider for ListingTable {
                     file_groups: partitioned_file_lists,
                     statistics,
                     projection: projection.cloned(),
+                    column_hints: self.options.column_hints.clone(),
                     limit,
                     output_ordering,
                     table_partition_cols,
@@ -1086,7 +1098,7 @@ mod tests {
         let state = ctx.state();
 
         let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
-        let schema = opt.infer_schema(&state, &table_path).await?;
+        let schema = opt.infer_schema(&state, &table_path, None).await?;
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
             .with_schema(schema);
@@ -1111,7 +1123,7 @@ mod tests {
 
         let opt = ListingOptions::new(Arc::new(ParquetFormat::default()))
             .with_collect_stat(false);
-        let schema = opt.infer_schema(&state, &table_path).await?;
+        let schema = opt.infer_schema(&state, &table_path, None).await?;
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
             .with_schema(schema);
@@ -1134,7 +1146,7 @@ mod tests {
         let ctx = SessionContext::new();
         let state = ctx.state();
         let options = ListingOptions::new(Arc::new(ParquetFormat::default()));
-        let schema = options.infer_schema(&state, &table_path).await.unwrap();
+        let schema = options.infer_schema(&state, &table_path, None).await.unwrap();
 
         use crate::physical_plan::expressions::col as physical_col;
         use std::ops::Add;

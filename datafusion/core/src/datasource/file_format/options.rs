@@ -202,6 +202,8 @@ pub struct ParquetReadOptions<'a> {
     pub schema: Option<&'a Schema>,
     /// Indicates how the file is sorted
     pub file_sort_order: Vec<Vec<Expr>>,
+    /// some specific implementations use this to load only specified columns
+    pub column_hints: Option<Vec<String>>,
 }
 
 impl<'a> Default for ParquetReadOptions<'a> {
@@ -213,6 +215,7 @@ impl<'a> Default for ParquetReadOptions<'a> {
             skip_metadata: None,
             schema: None,
             file_sort_order: vec![],
+            column_hints: None,
         }
     }
 }
@@ -462,7 +465,7 @@ pub trait ReadOptions<'a> {
         }
 
         self.to_listing_options(config, state.default_table_options())
-            .infer_schema(&state, &table_path)
+            .infer_schema(&state, &table_path, None)
             .await
     }
 }
@@ -523,6 +526,7 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
             .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
+            .with_column_hints(self.column_hints.clone())
     }
 
     async fn get_resolved_schema(

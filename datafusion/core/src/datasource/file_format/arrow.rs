@@ -76,6 +76,7 @@ impl FileFormat for ArrowFormat {
         _state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
+        _columns: Option<Vec<String>>
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
         for object in objects {
@@ -413,6 +414,7 @@ mod tests {
                     &state,
                     &(store.clone() as Arc<dyn ObjectStore>),
                     &[object_meta.clone()],
+                    None,
                 )
                 .await?;
             let actual_fields = inferred_schema
@@ -452,6 +454,7 @@ mod tests {
                 &state,
                 &(store.clone() as Arc<dyn ObjectStore>),
                 &[object_meta.clone()],
+                None,
             )
             .await;
 
