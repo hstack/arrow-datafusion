@@ -715,10 +715,13 @@ pub async fn collect(
 ///
 /// Dropping the stream will abort the execution of the query, and free up
 /// any allocated resources
+#[instrument(skip_all)]
 pub fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<SendableRecordBatchStream> {
+    let name = plan.schema();
+    info!("running plan: {:?}", name);
     match plan.output_partitioning().partition_count() {
         0 => Ok(Box::pin(EmptyRecordBatchStream::new(plan.schema()))),
         1 => plan.execute(0, context),
@@ -801,6 +804,7 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 #[cfg(test)]
 #[allow(clippy::single_component_path_imports)]
 use rstest_reuse;
+use tracing::{info, instrument};
 
 #[cfg(test)]
 mod tests {

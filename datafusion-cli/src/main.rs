@@ -38,6 +38,13 @@ use datafusion_cli::{
 
 use clap::Parser;
 use mimalloc::MiMalloc;
+use opentelemetry::global::shutdown_tracer_provider;
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::runtime;
+use tracing::info;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -150,12 +157,54 @@ pub async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    shutdown_tracer_provider();
     ExitCode::SUCCESS
+}
+
+pub fn setup_tracing() {
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        // enable everything
+        // .with_max_level(tracing::Level::INFO)
+        .compact()
+        // Display source code file paths
+        .with_file(true)
+        // Display source code line numbers
+        .with_line_number(true)
+        // Display the thread ID an event was recorded on
+        .with_thread_ids(true)
+        // Don't display the event's target (module path)
+        .with_target(false);
+    // sets this to be the default, global collector for this application.
+    // .finish();
+
+    // log level filtering here
+    let filter_layer = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("info"))
+        .unwrap();
+
+    let registry = tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(fmt_layer);
+
+    let otlp_exporter = opentelemetry_otlp::new_exporter().tonic();
+
+    let tracer = opentelemetry_otlp::new_pipeline()
+        .tracing()
+        .with_exporter(otlp_exporter)
+        // .install_simple()
+        .install_batch(runtime::Tokio)
+        .unwrap();
+
+    let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+    registry.with(otel_layer).init();
+
+    // registry.init();
 }
 
 /// Main CLI entrypoint
 async fn main_inner() -> Result<()> {
-    env_logger::init();
+    // env_logger::init();
+    setup_tracing();
     let args = Args::parse();
 
     if !args.quiet {

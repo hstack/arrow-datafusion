@@ -46,14 +46,17 @@ use datafusion::sql::sqlparser;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use tokio::signal;
+use tracing::{info, instrument};
 
 /// run and execute SQL statements and commands, against a context with the given print options
+#[instrument(skip_all)]
 pub async fn exec_from_commands(
     ctx: &mut SessionContext,
     commands: Vec<String>,
     print_options: &PrintOptions,
 ) -> Result<()> {
     for sql in commands {
+        info!(?sql, "command");
         exec_and_print(ctx, print_options, sql).await?;
     }
 
