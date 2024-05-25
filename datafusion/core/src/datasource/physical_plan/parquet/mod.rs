@@ -400,6 +400,7 @@ impl ExecutionPlan for ParquetExec {
         Ok(Some(Arc::new(new_plan)))
     }
 
+    #[tracing::instrument(name = "parquet_exec_execute", skip(self, ctx))]
     fn execute(
         &self,
         partition_index: usize,

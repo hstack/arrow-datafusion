@@ -117,6 +117,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         Ok(Arc::new(CoalescePartitionsExec::new(children[0].clone())))
     }
 
+    #[tracing::instrument(name = "coalesce_partitions_execute", skip(self, context))]
     fn execute(
         &self,
         partition: usize,

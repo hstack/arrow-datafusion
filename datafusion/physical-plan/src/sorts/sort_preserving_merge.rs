@@ -187,6 +187,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         ))
     }
 
+    #[tracing::instrument(name = "sort_preserving_merge_execute", skip(self, context))]
     fn execute(
         &self,
         partition: usize,

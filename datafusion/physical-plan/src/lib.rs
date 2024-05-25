@@ -699,6 +699,7 @@ pub fn displayable(plan: &dyn ExecutionPlan) -> DisplayableExecutionPlan<'_> {
 }
 
 /// Execute the [ExecutionPlan] and collect the results in memory
+#[tracing::instrument(skip_all)]
 pub async fn collect(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,

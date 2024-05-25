@@ -65,6 +65,7 @@ pin-project-lite = "^0.2.7"
 rand = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+tracing-futures = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }

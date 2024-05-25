@@ -127,6 +127,8 @@ tempfile = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { version = "0.7.4", features = ["io"], optional = true }
 tracing = { workspace = true }
+# needed to instrument streams, for futures the tracing crate is enough
+tracing-futures = { workspace = true, features = ["futures-03"]}
 url = { workspace = true }
 uuid = { version = "1.7", features = ["v4"] }
 xz2 = { version = "0.1", optional = true, features = ["static"] }

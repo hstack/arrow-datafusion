@@ -104,6 +104,7 @@ pub async fn exec_from_lines(
     Ok(())
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn exec_from_files(
     ctx: &mut SessionContext,
     files: Vec<String>,
@@ -293,6 +294,7 @@ impl AdjustedPrintOptions {
     }
 }
 
+#[instrument(skip_all)]
 async fn create_plan(
     ctx: &mut SessionContext,
     statement: Statement,

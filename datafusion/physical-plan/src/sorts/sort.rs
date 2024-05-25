@@ -61,6 +61,7 @@ use datafusion_physical_expr::LexOrdering;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error, trace};
 use tokio::sync::mpsc::Sender;
+use tracing_futures::Instrument;
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -284,6 +285,10 @@ impl ExternalSorter {
     /// Appends an unsorted [`RecordBatch`] to `in_mem_batches`
     ///
     /// Updates memory usage metrics, and possibly triggers spilling to disk
+    #[tracing::instrument(
+        level = "trace", name = "insert_batch", skip_all,
+        fields(row_count = input.num_rows())
+    )]
     async fn insert_batch(&mut self, input: RecordBatch) -> Result<()> {
         if input.num_rows() == 0 {
             return Ok(());
@@ -922,6 +927,7 @@ impl ExecutionPlan for SortExec {
         Ok(Arc::new(new_sort))
     }
 
+    #[tracing::instrument(name = "sort_execute", skip(self, context))]
     fn execute(
         &self,
         partition: usize,
@@ -950,12 +956,18 @@ impl ExecutionPlan for SortExec {
             Ok(Box::pin(RecordBatchStreamAdapter::new(
                 self.schema(),
                 futures::stream::once(async move {
-                    while let Some(batch) = input.next().await {
-                        let batch = batch?;
-                        topk.insert_batch(batch)?;
-                    }
+                    let mut input = input
+                        .instrument(tracing::debug_span!("sort_input", partition = partition).or_current());
+
+                    while let Some(batch) = input.next()
+                        .instrument(tracing::trace_span!("next_item", partition = partition).or_current())
+                        .await {
+                            let batch = batch?;
+                            topk.insert_batch(batch)?
+                        }
                     topk.emit()
                 })
+                .instrument(tracing::debug_span!("streaming_sort_topk", partition = partition).or_current())
                 .try_flatten(),
             )))
         } else {
@@ -980,6 +992,7 @@ impl ExecutionPlan for SortExec {
                     }
                     sorter.sort()
                 })
+                .instrument(tracing::debug_span!("streaming_sort", partition = partition).or_current())
                 .try_flatten(),
             )))
         }

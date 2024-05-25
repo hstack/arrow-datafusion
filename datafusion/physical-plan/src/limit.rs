@@ -151,6 +151,7 @@ impl ExecutionPlan for GlobalLimitExec {
         )))
     }
 
+    #[tracing::instrument(name = "global_limit_execute", skip(self, context))]
     fn execute(
         &self,
         partition: usize,

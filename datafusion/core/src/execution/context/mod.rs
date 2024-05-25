@@ -483,6 +483,7 @@ impl SessionContext {
     /// If you wish to limit the type of plan that can be run from
     /// SQL, see [`Self::sql_with_options`] and
     /// [`SQLOptions::verify_plan`].
+    #[tracing::instrument(skip_all)]
     pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
             LogicalPlan::Ddl(ddl) => {
@@ -1984,6 +1985,7 @@ impl SessionState {
     /// This function will error for [`LogicalPlan`]s such as catalog DDL like
     /// `CREATE TABLE`, which do not have corresponding physical plans and must
     /// be handled by another layer, typically [`SessionContext`].
+    #[tracing::instrument(skip_all)]
     pub async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,

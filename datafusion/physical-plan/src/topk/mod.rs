@@ -144,6 +144,10 @@ impl TopK {
 
     /// Insert `batch`, remembering if any of its values are among
     /// the top k seen so far.
+    #[tracing::instrument(
+        level = "trace", name = "insert_batch_topk", skip_all,
+        fields(row_count = batch.num_rows())
+    )]
     pub fn insert_batch(&mut self, batch: RecordBatch) -> Result<()> {
         // Updates on drop
         let _timer = self.metrics.baseline.elapsed_compute().timer();
