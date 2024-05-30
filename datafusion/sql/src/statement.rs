@@ -1008,15 +1008,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             };
 
-            if !(&key.contains('.')) {
-                // If a config does not belong to any namespace, we assume it is
-                // a format option and apply the format prefix for backwards
-                // compatibility.
-                let renamed_key = format!("format.{}", key.to_lowercase());
-                options_map.insert(renamed_key, value_string.to_lowercase());
-            } else {
-                options_map.insert(key.to_lowercase(), value_string);
-            }
+            // if !(&key.contains('.')) {
+            //     // If a config does not belong to any namespace, we assume it is
+            //     // a format option and apply the format prefix for backwards
+            //     // compatibility.
+            //     let renamed_key = format!("format.{}", key.to_lowercase());
+            //     options_map.insert(renamed_key, value_string.to_lowercase());
+            // } else {
+            //     options_map.insert(key.to_lowercase(), value_string.to_lowercase());
+            // }
+            options_map.insert(key.to_lowercase(), value_string);
         }
 
         let compression = options_map
