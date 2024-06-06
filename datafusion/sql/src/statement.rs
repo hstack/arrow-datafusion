@@ -1015,7 +1015,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let renamed_key = format!("format.{}", key.to_lowercase());
                 options_map.insert(renamed_key, value_string.to_lowercase());
             } else {
-                options_map.insert(key.to_lowercase(), value_string.to_lowercase());
+                options_map.insert(key.to_lowercase(), value_string);
             }
         }
 
