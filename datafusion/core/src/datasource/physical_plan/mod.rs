@@ -74,6 +74,8 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, SchemaRef};
+use arrow_array::{Array, StructArray};
+use arrow_schema::Fields;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
 
@@ -254,7 +256,7 @@ pub(crate) struct DefaultSchemaAdapterFactory {}
 #[cfg(feature = "parquet")]
 impl SchemaAdapterFactory for DefaultSchemaAdapterFactory {
     fn create(&self, table_schema: SchemaRef) -> Box<dyn SchemaAdapter> {
-        Box::new(DefaultSchemaAdapter { table_schema })
+        Box::new(NestedSchemaAdapter { table_schema })
     }
 }
 
@@ -359,6 +361,140 @@ impl SchemaMapper for SchemaMapping {
         Ok(record_batch)
     }
 }
+
+/////////////////
+
+#[cfg(feature = "parquet")]
+impl NestedSchemaAdapter {
+    fn map_schema_nested(
+        &self,
+        fields: &Fields,
+    ) -> Result<(Arc<NestedSchemaMapping>, Vec<usize>)> {
+        let mut projection = Vec::with_capacity(fields.len());
+        let mut field_mappings = vec![None; self.table_schema.fields().len()];
+
+        for (file_idx, file_field) in fields.iter().enumerate() {
+            if let Some((table_idx, table_field)) =
+                self.table_schema.fields().find(file_field.name())
+            {
+                match can_cast_types(file_field.data_type(), table_field.data_type()) {
+                    true => {
+                        field_mappings[table_idx] = Some(projection.len());
+                        projection.push(file_idx);
+                    }
+                    false => {
+                        return plan_err!(
+                            "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
+                            file_field.name(),
+                            file_field.data_type(),
+                            table_field.data_type()
+                        )
+                    }
+                }
+            }
+        }
+
+        Ok((
+            Arc::new(NestedSchemaMapping {
+                table_schema: self.table_schema.clone(),
+                field_mappings,
+            }),
+            projection,
+        ))
+    }
+}
+
+#[cfg(feature = "parquet")]
+#[derive(Clone, Debug)]
+pub(crate) struct NestedSchemaAdapter {
+    /// Schema for the table
+    table_schema: SchemaRef,
+}
+
+#[cfg(feature = "parquet")]
+impl SchemaAdapter for NestedSchemaAdapter {
+    fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize> {
+        let field = self.table_schema.field(index);
+        Some(file_schema.fields.find(field.name())?.0)
+    }
+
+    fn map_schema(&self, file_schema: &Schema) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
+        self
+            .map_schema_nested(file_schema.fields())
+            .map(|(s, v)| (s as Arc<dyn SchemaMapper>, v))
+    }
+}
+
+#[cfg(feature = "parquet")]
+#[derive(Debug)]
+pub struct NestedSchemaMapping {
+    table_schema: SchemaRef,
+    field_mappings: Vec<Option<usize>>,
+}
+
+#[cfg(feature = "parquet")]
+impl NestedSchemaMapping {
+    fn map_struct(&self, batch: StructArray) -> Result<StructArray> {
+        let batch_rows = batch.len();
+        let batch_cols = batch.columns().to_vec();
+
+        let fields = self
+            .table_schema
+            .fields();
+
+        let cols = fields
+            .iter()
+            .zip(&self.field_mappings)
+            .map(|(field, file_idx)| {
+                match file_idx {
+                    Some(batch_idx) => {
+                        cast(&batch_cols[*batch_idx], field.data_type())
+                            .map(|file_col| {
+                                match field.data_type() {
+                                    // recursively transform the struct to conform
+                                    // to target schema at this nesting level
+                                    DataType::Struct(fields) => {
+                                        let file_struct = file_col
+                                            .as_any()
+                                            .downcast_ref::<StructArray>()
+                                            .unwrap();
+
+                                        // create mapper for inner struct
+                                        let struct_adapter = NestedSchemaAdapter {
+                                            table_schema: Arc::new(Schema::new(fields.clone()))
+                                        };
+                                        // FIXME Result
+                                        let (mapper, _) = struct_adapter
+                                            .map_schema_nested(file_struct.fields())
+                                            .unwrap();
+                                        let mapped_struct = mapper
+                                            .map_struct(file_struct.clone())
+                                            .unwrap();
+
+                                        Arc::new(mapped_struct)
+                                    },
+                                    _ => file_col,
+                                }
+                            })
+                    }
+                    None => Ok(new_null_array(field.data_type(), batch_rows)),
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let struct_array = StructArray::try_new(fields.clone(), cols, None)?;
+        Ok(struct_array)
+    }
+}
+
+#[cfg(feature = "parquet")]
+impl SchemaMapper for NestedSchemaMapping {
+    fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
+        self.map_struct(batch.into()).map(|s| s.into())
+    }
+}
+
+//////////////
 
 /// A single file or part of a file that should be read, along with its schema, statistics
 pub struct FileMeta {
