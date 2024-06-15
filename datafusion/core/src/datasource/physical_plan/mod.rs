@@ -74,7 +74,7 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, SchemaRef};
-use arrow_array::{Array, StructArray};
+use arrow_array::{Array, ArrayRef, StructArray};
 use arrow_schema::Fields;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
@@ -377,20 +377,24 @@ impl NestedSchemaAdapter {
             if let Some((table_idx, table_field)) =
                 self.table_schema.fields().find(file_field.name())
             {
-                match can_cast_types(file_field.data_type(), table_field.data_type()) {
-                    true => {
-                        field_mappings[table_idx] = Some(projection.len());
-                        projection.push(file_idx);
-                    }
-                    false => {
-                        return plan_err!(
-                            "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
-                            file_field.name(),
-                            file_field.data_type(),
-                            table_field.data_type()
-                        )
-                    }
-                }
+                field_mappings[table_idx] = Some(projection.len());
+                projection.push(file_idx);
+
+                // FIXME: support structs with fields of the same type but different order
+                // match can_cast_types(file_field.data_type(), table_field.data_type()) {
+                //     true => {
+                //         field_mappings[table_idx] = Some(projection.len());
+                //         projection.push(file_idx);
+                //     }
+                //     false => {
+                //         return plan_err!(
+                //             "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
+                //             file_field.name(),
+                //             file_field.data_type(),
+                //             table_field.data_type()
+                //         )
+                //     }
+                // }
             }
         }
 
@@ -448,34 +452,33 @@ impl NestedSchemaMapping {
             .map(|(field, file_idx)| {
                 match file_idx {
                     Some(batch_idx) => {
-                        cast(&batch_cols[*batch_idx], field.data_type())
-                            .map(|file_col| {
-                                match field.data_type() {
-                                    // recursively transform the struct to conform
-                                    // to target schema at this nesting level
-                                    DataType::Struct(fields) => {
-                                        let file_struct = file_col
-                                            .as_any()
-                                            .downcast_ref::<StructArray>()
-                                            .unwrap();
+                        match field.data_type() {
+                            // recursively transform the struct to conform
+                            // to target schema at this nesting level
+                            DataType::Struct(fields) => {
+                                let file_struct = (&batch_cols[*batch_idx])
+                                    .as_any()
+                                    .downcast_ref::<StructArray>()
+                                    .unwrap();
 
-                                        // create mapper for inner struct
-                                        let struct_adapter = NestedSchemaAdapter {
-                                            table_schema: Arc::new(Schema::new(fields.clone()))
-                                        };
-                                        // FIXME Result
-                                        let (mapper, _) = struct_adapter
-                                            .map_schema_nested(file_struct.fields())
-                                            .unwrap();
-                                        let mapped_struct = mapper
-                                            .map_struct(file_struct.clone())
-                                            .unwrap();
+                                // create mapper for inner struct
+                                let struct_adapter = NestedSchemaAdapter {
+                                    table_schema: Arc::new(Schema::new(fields.clone()))
+                                };
+                                // FIXME Result
+                                let (mapper, _) = struct_adapter
+                                    .map_schema_nested(file_struct.fields())
+                                    .unwrap();
+                                let mapped_struct = mapper
+                                    .map_struct(file_struct.clone())
+                                    .unwrap();
 
-                                        Arc::new(mapped_struct)
-                                    },
-                                    _ => file_col,
-                                }
-                            })
+                                Ok(Arc::new(mapped_struct) as ArrayRef)
+                            },
+                            _ => {
+                                cast(&batch_cols[*batch_idx], field.data_type())
+                            },
+                        }
                     }
                     None => Ok(new_null_array(field.data_type(), batch_rows)),
                 }
