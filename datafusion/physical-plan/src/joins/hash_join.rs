@@ -69,11 +69,12 @@ use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 use datafusion_physical_expr::expressions::UnKnownColumn;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
+use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
+use crate::joins::utils::project_index_to_exprs;
 
 type SharedBitmapBuilder = Mutex<BooleanBufferBuilder>;
 
@@ -608,25 +609,6 @@ impl DisplayAs for HashJoinExec {
             }
         }
     }
-}
-
-fn project_index_to_exprs(
-    projection_index: &[usize],
-    schema: &SchemaRef,
-) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
-    projection_index
-        .iter()
-        .map(|index| {
-            let field = schema.field(*index);
-            (
-                Arc::new(datafusion_physical_expr::expressions::Column::new(
-                    field.name(),
-                    *index,
-                )) as Arc<dyn PhysicalExpr>,
-                field.name().to_owned(),
-            )
-        })
-        .collect::<Vec<_>>()
 }
 
 impl ExecutionPlan for HashJoinExec {
@@ -1566,6 +1548,7 @@ mod tests {
     use hashbrown::raw::RawTable;
     use rstest::*;
     use rstest_reuse::*;
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
     fn div_ceil(a: usize, b: usize) -> usize {
         (a + b - 1) / b
