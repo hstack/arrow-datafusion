@@ -1,16 +1,10 @@
 use crate::datasource::schema_adapter::{SchemaAdapter, SchemaMapper};
-use arrow::compute::{can_cast_types, cast};
-use arrow_array::cast::{
-    as_fixed_size_list_array, as_generic_list_array, as_struct_array,
-};
-use arrow_array::{new_null_array, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, RecordBatch, StructArray, RecordBatchOptions, MapArray};
-use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
+use arrow_array::RecordBatch;
+use arrow_schema::{Fields, Schema, SchemaRef};
 use datafusion_common::plan_err;
-use datafusion_common::DataFusionError;
 use std::sync::Arc;
-use datafusion_common::cast::as_map_array;
+use datafusion_common::deep::{can_rewrite_field, try_rewrite_record_batch};
 
-#[cfg(feature = "parquet")]
 impl NestedSchemaAdapter {
     fn map_schema_nested(
         &self,
@@ -18,7 +12,7 @@ impl NestedSchemaAdapter {
     ) -> datafusion_common::Result<(Arc<NestedSchemaMapping>, Vec<usize>)> {
         let mut projection = Vec::with_capacity(fields.len());
         // start from the destination fields
-        for (table_idx, table_field) in self.table_schema.fields.iter().enumerate() {
+        for (_table_idx, table_field) in self.table_schema.fields.iter().enumerate() {
             // if the file exists in the source, check if we can rewrite it to the destination,
             // and add it to the projections
             if let Some((file_idx, file_field)) =
@@ -45,14 +39,12 @@ impl NestedSchemaAdapter {
     }
 }
 
-#[cfg(feature = "parquet")]
 #[derive(Clone, Debug)]
 pub(crate) struct NestedSchemaAdapter {
     /// Schema for the table
     pub table_schema: SchemaRef,
 }
 
-#[cfg(feature = "parquet")]
 impl SchemaAdapter for NestedSchemaAdapter {
     fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize> {
         let field = self.table_schema.field(index);
@@ -68,13 +60,11 @@ impl SchemaAdapter for NestedSchemaAdapter {
     }
 }
 
-#[cfg(feature = "parquet")]
 #[derive(Debug)]
 pub struct NestedSchemaMapping {
     table_schema: SchemaRef,
 }
 
-#[cfg(feature = "parquet")]
 impl SchemaMapper for NestedSchemaMapping {
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch> {
         let record_batch = try_rewrite_record_batch(batch.schema(), batch, self.table_schema.clone(), true, false)?;
@@ -89,442 +79,25 @@ impl SchemaMapper for NestedSchemaMapping {
     }
 }
 
-fn data_type_recurs(dt: &DataType) -> bool {
-    match dt {
-        // scalars
-        DataType::Null | DataType::Boolean | DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 |
-        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 |
-        DataType::Float16 | DataType::Float32 | DataType::Float64 |
-        DataType::Timestamp(_, _) | DataType::Date32 | DataType::Date64 |
-        DataType::Time32(_) | DataType::Time64(_) | DataType::Duration(_) | DataType::Interval(_) |
-        DataType::Binary | DataType::FixedSizeBinary(_) | DataType::LargeBinary | DataType::BinaryView |
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View |
-        DataType::Decimal128(_, _) | DataType::Decimal256(_, _) |
-        DataType::Dictionary(_, _) =>
-            false,
-        // containers
-        DataType::RunEndEncoded(_, val) => data_type_recurs(val.data_type()),
-        DataType::Union(_, _) => true,
-        DataType::List(f) => data_type_recurs(f.data_type()),
-        DataType::ListView(f) => data_type_recurs(f.data_type()),
-        DataType::FixedSizeList(f, _) => data_type_recurs(f.data_type()),
-        DataType::LargeList(f) => data_type_recurs(f.data_type()),
-        DataType::LargeListView(f) => data_type_recurs(f.data_type()),
-        // list of struct
-        DataType::Map(_, _) |
-        DataType::Struct(_) =>
-            true,
-    }
-}
-
-fn try_rewrite_record_batch(
-    src: SchemaRef,
-    src_record_batch: RecordBatch,
-    dst: SchemaRef,
-    fill_missing_source_fields: bool,
-    error_on_missing_source_fields: bool,
-) -> datafusion_common::Result<RecordBatch> {
-    // called for fields - does the name resolution
-    fn recurse_fields(
-        dst_fields: &Fields,
-        src_fields: &Fields,
-        arrays: Vec<ArrayRef>,
-        num_rows: usize,
-        fill_missing_source_fields: bool,
-        error_on_missing_source_fields: bool,
-    ) -> datafusion_common::Result<(Vec<ArrayRef>, Vec<FieldRef>)> {
-        let mut out_arrays: Vec<ArrayRef> = vec![];
-        let mut out_fields: Vec<FieldRef> = vec![];
-        for i in 0..dst_fields.len() {
-            let dst_field = dst_fields[i].clone();
-            let dst_name = dst_field.name();
-
-            let src_field_opt = src_fields
-                .iter()
-                .enumerate()
-                .find(|(idx, b)| b.name() == dst_name);
-
-            // if the field exists in the source
-            if src_field_opt.is_some() {
-                let (src_idx, src_field) = src_field_opt.unwrap();
-                let src_field = src_field.clone();
-                let src_arr = arrays[src_idx].clone();
-                let (tmp_array, tmp_field) = recurse_field(
-                    dst_field,
-                    src_field,
-                    src_arr,
-                    num_rows,
-                    fill_missing_source_fields,
-                    error_on_missing_source_fields,
-                )?;
-                out_arrays.push(tmp_array);
-                out_fields.push(tmp_field);
-            } else {
-                if fill_missing_source_fields {
-                    let tmp_array = new_null_array(dst_field.data_type(), num_rows);
-                    out_arrays.push(tmp_array);
-                    out_fields.push(dst_field);
-                } else if error_on_missing_source_fields {
-                    return Err(datafusion_common::DataFusionError::Internal(
-                        format!("field {dst_name} not found in source")
-                    ));
-                }
-            }
-        }
-        Ok((out_arrays, out_fields))
-    }
-    fn cast_df(
-        array: &dyn Array,
-        to_type: &DataType,
-    ) -> datafusion_common::Result<ArrayRef> {
-        let tmp = cast(array, to_type);
-        let tmp2: datafusion_common::Result<ArrayRef> = tmp.map_err(|ae| ae.into());
-        return tmp2;
-    }
-
-    fn recurse_field(
-        dst_field: FieldRef,
-        src_field: FieldRef,
-        src_array: ArrayRef,
-        num_rows: usize,
-        fill_missing_source_fields: bool,
-        error_on_missing_source_fields: bool,
-    ) -> datafusion_common::Result<(ArrayRef, FieldRef)> {
-        let arrow_cast_available =
-            can_cast_types(src_field.data_type(), dst_field.data_type());
-        if arrow_cast_available {
-            let casted_array = cast_df(src_array.as_ref(), dst_field.data_type())?;
-            return Ok((casted_array, dst_field.clone()));
-        }
-        match (src_field.data_type(), dst_field.data_type()) {
-            (DataType::List(src_inner), DataType::List(dst_inner)) => {
-                if data_type_recurs(src_field.data_type()) {
-                    let src_array_clone = src_array.clone();
-
-                    let src_inner_list_array =
-                        as_generic_list_array::<i32>(src_array_clone.as_ref()).clone();
-                    let src_offset_buffer = src_inner_list_array.offsets().clone();
-                    let src_nulls = match src_inner_list_array.nulls() {
-                        None => None,
-                        Some(x) => Some(x.clone()),
-                    };
-                    let (values, field) = recurse_field(
-                        dst_inner.clone(),
-                        src_inner.clone(),
-                        src_inner_list_array.values().clone(),
-                        num_rows,
-                        fill_missing_source_fields,
-                        error_on_missing_source_fields,
-                    )?;
-                    let nlarr = ListArray::try_new(
-                        field.clone(),
-                        src_offset_buffer,
-                        values,
-                        src_nulls,
-                    );
-                    let list_field = Arc::new(Field::new(
-                        dst_field.name().clone(),
-                        DataType::List(field.clone()),
-                        dst_field.is_nullable()
-                    ));
-
-                    Ok((Arc::new(nlarr.unwrap()), list_field))
-                } else {
-                    let casted_array = cast_df(src_array.as_ref(), dst_field.data_type())?;
-                    return Ok((casted_array, dst_field.clone()));
-                }
-            }
-            (
-                DataType::FixedSizeList(src_inner, src_sz),
-                DataType::FixedSizeList(dst_inner, dst_sz),
-            ) => {
-                if src_sz != dst_sz {
-                    // Let Arrow do its thing, it's going to error
-                    let casted_array = cast_df(src_array.as_ref(), dst_field.data_type())?;
-                    return Ok((casted_array, dst_field.clone()));
-                }
-                if data_type_recurs(src_field.data_type()) {
-                    let tmp = src_array.clone();
-                    let src_inner_list_array =
-                        as_fixed_size_list_array(tmp.as_ref()).clone();
-                    let src_nulls = match src_inner_list_array.nulls() {
-                        None => None,
-                        Some(x) => Some(x.clone()),
-                    };
-                    let (values, field) = recurse_field(
-                        dst_inner.clone(),
-                        src_inner.clone(),
-                        src_inner_list_array.values().clone(),
-                        num_rows,
-                        fill_missing_source_fields,
-                        error_on_missing_source_fields,
-                    )?;
-
-                    let nlarr = FixedSizeListArray::try_new(
-                        dst_field.clone(),
-                        *dst_sz,
-                        values,
-                        src_nulls,
-                    );
-                    Ok((Arc::new(nlarr.unwrap()), field))
-                } else {
-                    let casted_array = cast_df(src_array.as_ref(), dst_field.data_type())?;
-                    return Ok((casted_array, dst_field.clone()));
-                }
-            }
-            (DataType::LargeList(src_inner), DataType::LargeList(dst_inner)) => {
-                if data_type_recurs(src_field.data_type()) {
-                    let tmp = src_array.clone();
-                    let src_inner_list_array =
-                        as_generic_list_array::<i64>(tmp.as_ref()).clone();
-                    let src_offset_buffer = src_inner_list_array.offsets().clone();
-                    let src_nulls = match src_inner_list_array.nulls() {
-                        None => None,
-                        Some(x) => Some(x.clone()),
-                    };
-                    let (values, field) = recurse_field(
-                        dst_inner.clone(),
-                        src_inner.clone(),
-                        src_inner_list_array.values().clone(),
-                        num_rows,
-                        fill_missing_source_fields,
-                        error_on_missing_source_fields,
-                    )?;
-
-                    let nlarr = LargeListArray::try_new(
-                        field.clone(),
-                        src_offset_buffer,
-                        values,
-                        src_nulls,
-                    );
-                    let list_field = Arc::new(Field::new(
-                        dst_field.name().clone(),
-                        DataType::LargeList(field.clone()),
-                        dst_field.is_nullable()
-                    ));
-
-                    Ok((Arc::new(nlarr.unwrap()), list_field))
-                } else {
-                    let casted_array = cast_df(src_array.as_ref(), dst_field.data_type())?;
-                    return Ok((casted_array, dst_field.clone()));
-                }
-            }
-
-            (DataType::Map(src_inner, _), DataType::Map(dst_inner, dst_ordered))  => {
-                match (src_inner.data_type(), dst_inner.data_type()) {
-                    (DataType::Struct(src_inner_f), DataType::Struct(dst_inner_f)) => {
-                        let src_map = as_map_array(src_array.as_ref())?;
-                        let src_nulls = match src_map.nulls() {
-                            None => None,
-                            Some(x) => Some(x.clone()),
-                        };
-                        let src_offset_buffer = src_map.offsets().clone();
-
-                        let (tmp_values_array, tmp_values_field) = recurse_field(
-                            dst_inner_f[1].clone(),
-                            src_inner_f[1].clone(),
-                            src_map.values().clone(),
-                            num_rows,
-                            fill_missing_source_fields,
-                            error_on_missing_source_fields
-                        )?;
-
-                        // re-build map from keys and values after recursing only on the values
-                        let entry_struct = StructArray::from(vec![
-                            (dst_inner_f[0].clone(), src_map.keys().clone()),
-                            (tmp_values_field, tmp_values_array),
-                        ]);
-
-                        let struct_field = Arc::new(Field::new(
-                            dst_inner.name().clone(),
-                            entry_struct.data_type().clone(),
-                            false,
-                        ));
-                        let out_map = MapArray::try_new(
-                            struct_field.clone(),
-                            src_offset_buffer,
-                            entry_struct,
-                            src_nulls,
-                            *dst_ordered
-                        )?;
-
-                        let map_field = Arc::new(Field::new(
-                            dst_field.name().clone(),
-                            DataType::Map(struct_field.clone(), *dst_ordered),
-                            dst_field.is_nullable()
-                        ));
-                        Ok((Arc::new(out_map), map_field))
-                    }
-                    _ => unreachable!() // unreachable
-                }
-            },
-
-            (DataType::Struct(src_inner), DataType::Struct(dst_inner)) => {
-                let src_struct_array = as_struct_array(src_array.as_ref());
-                let src_nulls = match src_struct_array.nulls() {
-                    None => None,
-                    Some(x) => Some(x.clone()),
-                };
-                let src_columns = src_struct_array
-                    .columns()
-                    .iter()
-                    .map(|a| a.clone())
-                    .collect::<Vec<_>>();
-                let (dst_columns, dst_fields) = recurse_fields(
-                    dst_inner,
-                    src_inner,
-                    src_columns,
-                    num_rows,
-                    fill_missing_source_fields,
-                    error_on_missing_source_fields,
-                )?;
-                let struct_array =
-                    StructArray::try_new(dst_inner.clone(), dst_columns, src_nulls)
-                        .map_err(|ae| DataFusionError::from(ae))?;
-                let struct_field = Field::new_struct(dst_field.name(), dst_fields, dst_field.is_nullable());
-                Ok((Arc::new(struct_array), Arc::new(struct_field)))
-            }
-            _ => {
-                panic!()
-            }
-        }
-    }
-
-    let num_rows = src_record_batch.num_rows();
-    let (final_columns, final_fields) = recurse_fields(
-        dst.fields(),
-        src.fields(),
-        src_record_batch.columns().into(),
-        num_rows,
-        fill_missing_source_fields,
-        error_on_missing_source_fields,
-    )?;
-
-    let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
-    let schema = Arc::new(Schema::new(final_fields));
-    let record_batch = RecordBatch::try_new_with_options(schema, final_columns, &options)?;
-    Ok(record_batch)
-}
-
-// called for fields - does the name resolution
-fn can_rewrite_fields(
-    dst_fields: &Fields,
-    src_fields: &Fields,
-    fill_missing_source_fields: bool,
-) -> bool {
-    let mut out = true;
-    for i in 0..dst_fields.len() {
-        let dst_field = dst_fields[i].clone();
-        let dst_name = dst_field.name();
-
-        let src_field_opt = src_fields
-            .iter()
-            .enumerate()
-            .find(|(idx, b)| b.name() == dst_name);
-
-        // if the field exists in the source
-        if src_field_opt.is_some() {
-            let (src_idx, src_field) = src_field_opt.unwrap();
-            let src_field = src_field.clone();
-            let can_cast = can_rewrite_field(
-                dst_field,
-                src_field,
-                fill_missing_source_fields,
-            );
-            out = out && can_cast;
-        } else {
-            out = out && fill_missing_source_fields;
-        }
-    }
-    out
-}
-
-fn can_rewrite_field(
-    dst_field: FieldRef,
-    src_field: FieldRef,
-    fill_missing_source_fields: bool,
-) -> bool {
-    let can_cast_by_arrow =
-        !data_type_recurs(dst_field.data_type()) &&
-            !data_type_recurs(src_field.data_type());
-    if can_cast_by_arrow {
-        return can_cast_types(src_field.data_type(), dst_field.data_type());
-    }
-    match (src_field.data_type(), dst_field.data_type()) {
-        (DataType::List(src_inner), DataType::List(dst_inner)) |
-        (DataType::List(src_inner), DataType::LargeList(dst_inner)) |
-        (DataType::LargeList(src_inner), DataType::LargeList(dst_inner)) => {
-            if data_type_recurs(src_inner.data_type()) && data_type_recurs(dst_inner.data_type())  {
-                return can_rewrite_field(
-                    dst_inner.clone(),
-                    src_inner.clone(),
-                    fill_missing_source_fields,
-                );
-            } else {
-                return can_cast_types(src_inner.data_type(), dst_inner.data_type());
-            }
-        }
-        (
-            DataType::FixedSizeList(src_inner, src_sz),
-            DataType::FixedSizeList(dst_inner, dst_sz),
-        ) => {
-            if src_sz != dst_sz {
-                return false
-            }
-            if data_type_recurs(src_inner.data_type()) && data_type_recurs(dst_inner.data_type())  {
-                return can_rewrite_field(
-                    dst_inner.clone(),
-                    src_inner.clone(),
-                    fill_missing_source_fields,
-                );
-            } else {
-                return can_cast_types(src_inner.data_type(), dst_inner.data_type());
-            }
-        }
-        (DataType::Map(src_inner, _), DataType::Map(dst_inner, _)) => {
-            return can_rewrite_field(
-                dst_inner.clone(),
-                src_inner.clone(),
-                fill_missing_source_fields,
-            );
-        }
-        (DataType::Struct(src_inner), DataType::Struct(dst_inner)) => {
-            return can_rewrite_fields(
-                dst_inner,
-                src_inner,
-                fill_missing_source_fields,
-            );
-        }
-        (src, dest) => {
-            false
-        }
-    }
-}
-
-fn can_rewrite(
-    src: SchemaRef,
-    dst: SchemaRef,
-    fill_missing_source_fields: bool,
-) -> bool {
-
-
-    can_rewrite_fields(
-        dst.fields(),
-        src.fields(),
-        fill_missing_source_fields,
-    )
-}
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
-    use arrow_array::builder::{GenericStringBuilder, ListBuilder};
+    use arrow_array::builder::{ArrayBuilder, BooleanBuilder, GenericStringBuilder, Int32Builder, ListBuilder, StringBuilder, StructBuilder, UInt32Builder};
     use arrow_array::{BooleanArray, RecordBatch, StringArray, StructArray, UInt32Array};
     use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
+    use log::info;
     use parquet::arrow::parquet_to_arrow_schema;
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
-    use crate::datasource::schema_adapter_deep::{can_rewrite, try_rewrite_record_batch};
+    use datafusion_common::deep::{can_rewrite, rewrite_schema, try_rewrite_record_batch};
+    use datafusion_optimizer::optimize_projections::OptimizeProjections;
+    use datafusion_optimizer::{Optimizer, OptimizerContext};
+    use datafusion_physical_plan::get_plan_string;
+    use crate::dataframe::DataFrame;
+    use crate::datasource::MemTable;
+    use crate::prelude::SessionContext;
 
     #[test]
     fn test_cast() -> crate::error::Result<()> {
@@ -623,6 +196,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_rewrite_schema() -> crate::error::Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i1", DataType::Int32, true),
+            Field::new(
+                "l1",
+                DataType::List(
+                    Arc::new(Field::new(
+                        "s1",
+                        DataType::Struct(
+                            Fields::from(vec![
+                                Field::new("s1s1", DataType::Utf8, true),
+                                Field::new("s1i2", DataType::Int32, true),
+                                Field::new(
+                                    "s1m1",
+                                    DataType::Map(
+                                        Arc::new(Field::new(
+                                            "entries",
+                                            DataType::Struct(
+                                                Fields::from(vec![
+                                                    Field::new("key", DataType::Utf8, false),
+                                                    Field::new("value", DataType::Utf8, false),
+                                                ])
+                                            ),
+                                            true
+                                        )),
+                                        false,
+                                    ),
+                                    true
+                                ),
+                                Field::new(
+                                    "s1l1",
+                                    DataType::List(
+                                        Arc::new(Field::new("s1l1i1", DataType::Date32, true))
+                                    ),
+                                    true
+                                ),
+                                // extra field
+                                Field::new("s1ts1", DataType::Time32(TimeUnit::Second), true),
+                            ])
+                        ),
+                        true
+                    ))
+                ),
+                true
+            ),
+        ]));
+        let out = rewrite_schema(
+            schema,
+            &vec![1],
+            &HashMap::from([
+                (0, vec![]),
+                (1, vec![
+                    "*.s1s1".to_string(),
+                    "*.s1l1".to_string()
+                ]),
+            ])
+        );
+        // info!("out: {:#?}", out);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_rewrite() -> crate::error::Result<()> {
         let _ = env_logger::try_init();
 
@@ -681,9 +316,10 @@ mod tests {
         let parquet_schema = parse_message_type(message_type)
             .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
             .unwrap();
+
         let arrow_schema = Arc::new(parquet_to_arrow_schema(parquet_schema.as_ref(), None).unwrap());
-        println!("schema: {:#?}", arrow_schema);
-        let (idx, ffield) = arrow_schema.fields().find("struct").unwrap();
+        // println!("schema: {:#?}", arrow_schema);
+        let (_idx, ffield) = arrow_schema.fields().find("struct").unwrap();
         let struct_field = ffield.clone();
         let struct_fields = match struct_field.data_type() {
             DataType::Struct(fields) => Some(fields),
@@ -745,5 +381,231 @@ mod tests {
 
         Ok(())
     }
+
+    pub fn logical_plan_str(dataframe: &DataFrame) -> String {
+        let cl = dataframe.clone();
+        let op = cl.into_optimized_plan().unwrap();
+        format!("{}", op.display_indent())
+    }
+
+    pub async fn physical_plan_str(dataframe: &DataFrame) -> String {
+        let cl = dataframe.clone();
+        let pp = cl.create_physical_plan().await.unwrap();
+        get_plan_string(&pp).join("\n")
+    }
+
+    #[tokio::test]
+    async fn test_deep_schema() -> crate::error::Result<()> {
+        let _ = env_logger::try_init();
+
+        let message_type= r#"
+            message schema {
+                REQUIRED INT32 id;
+                REQUIRED GROUP struct1 {
+                    REQUIRED BINARY name (UTF8);
+                    REQUIRED BOOLEAN bools;
+                    REQUIRED INT32 uint32 (INTEGER(32,false));
+                    REQUIRED GROUP tags (LIST) {
+                        REPEATED GROUP tags {
+                            OPTIONAL BINARY tag (UTF8);
+                        }
+                    }
+                }
+                OPTIONAL GROUP list_struct (LIST) {
+                    REPEATED GROUP struct {
+                        REQUIRED BOOLEAN bools;
+                        REQUIRED INT32 uint32 (INTEGER(32,false));
+                        REQUIRED GROUP int32 (LIST) {
+                            REPEATED GROUP list {
+                                OPTIONAL INT32 element;
+                            }
+                        }
+                    }
+                }
+                OPTIONAL GROUP struct_list {
+                    REQUIRED BOOLEAN bools;
+                    REQUIRED INT32 uint32 (INTEGER(32,false));
+                    REQUIRED GROUP products (LIST) {
+                        REPEATED GROUP product {
+                            OPTIONAL INT32 qty;
+                            OPTIONAL binary name(utf8);
+                        }
+                    }
+                }
+            }
+        "#;
+        let parquet_schema = parse_message_type(message_type)
+            .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
+            .unwrap();
+        {
+
+        }
+        // return Ok(());
+
+        let complete_schema = Arc::new(parquet_to_arrow_schema(parquet_schema.as_ref(), None).unwrap());
+        // info!("schema: {:#?}", complete_schema.clone());
+        // {
+        //     let kk = generate_leaf_paths(
+        //         complete_schema,
+        //         parquet_schema.as_ref(),
+        //         &vec![1, 2],
+        //         &HashMap::from([
+        //             (1 as usize, vec!["name".to_string(), "tags".to_string()])
+        //         ])
+        //     );
+        //     info!("kk: {:#?}", kk);
+        // }
+        // return Ok(());
+
+        let ctx = SessionContext::new();
+
+        let schema_fields = complete_schema.fields().clone();
+        let mut row_builder = StructBuilder::from_fields(schema_fields, 1);
+
+        // field 0
+        let f0_builder = row_builder.field_builder::<Int32Builder>(0).unwrap();
+        f0_builder.append_value(1);
+        let f0_arr = f0_builder.finish();
+
+        // field 1
+        let f1_builder = row_builder.field_builder::<StructBuilder>(1).unwrap();
+
+        // tbl.struct.name
+        {
+            let f1_name_builder = f1_builder.field_builder::<StringBuilder>(0).unwrap();
+            f1_name_builder.append_value("n1");
+        }
+        // tbl.struct.bools
+        {
+            let f1_bools_builder = f1_builder.field_builder::<BooleanBuilder>(1).unwrap();
+            f1_bools_builder.append_value(true);
+        }
+        // tbl.struct.uint32
+        let f1_uint32_builder = f1_builder.field_builder::<UInt32Builder>(2).unwrap();
+        f1_uint32_builder.append_value(1);
+        // tbl.struct.tags
+        let f1_tags_list_builder = f1_builder.field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(3).unwrap();
+        let f1_tags_item_builder = f1_tags_list_builder.values().as_any_mut().downcast_mut::<StringBuilder>().unwrap();
+        f1_tags_item_builder.append_value("t1");
+        f1_tags_item_builder.append_value("t2");
+        f1_tags_list_builder.append(true);
+
+        f1_builder.append(true);
+
+        let f1_arr = f1_builder.finish();
+        // field 2
+        // make_array(
+        //     named_struct(
+        //         'bools', false,
+        //         'uint32', 5,
+        //         'int32', make_array(10, 20)
+        //     )
+        // ),
+        let f2_builder = row_builder.field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(2).unwrap();
+        let f2_item_builder = f2_builder.values().as_any_mut().downcast_mut::<StructBuilder>().unwrap();
+
+        //tbl.list_struct[].bools
+        let f2_item_bools_builder = f2_item_builder.field_builder::<BooleanBuilder>(0).unwrap();
+        f2_item_bools_builder.append_value(true);
+        // tbl.list_struct[].uint32
+        let f2_item_uint32_builder = f2_item_builder.field_builder::<UInt32Builder>(1).unwrap();
+        f2_item_uint32_builder.append_value(5);
+        // tbl.list_struct[].uint32
+        let f2_item_int32_list_builder = f2_item_builder.field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(2).unwrap();
+        let f2_item_int32_item_builder = f2_item_int32_list_builder.values().as_any_mut().downcast_mut::<Int32Builder>().unwrap();
+        f2_item_int32_item_builder.append_values(&[10, 20], &[true, true]);
+        f2_item_int32_list_builder.append(true);
+
+        f2_item_builder.append(true);
+
+        f2_builder.append(true);
+
+        let f2_arr = f2_builder.finish();
+
+        // field 3
+        // named_struct(
+        //     'bools', true,
+        //     'uint32', 5,
+        //     'products', make_array(
+        //         named_struct(
+        //             'qty', 1,
+        //             'name', 'product1'
+        //         ),
+        //         named_struct(
+        //             'qty', 2,
+        //             'name', 'product2'
+        //         )
+        //     )
+        // )
+        let f3_builder = row_builder.field_builder::<StructBuilder>(3).unwrap();
+        // tbl.named_struct.bools
+        let f3_bools_builder = f3_builder.field_builder::<BooleanBuilder>(0).unwrap();
+        f3_bools_builder.append_value(true);
+        // tbl.named_struct.uint32
+        let f3_uint32_builder = f3_builder.field_builder::<UInt32Builder>(1).unwrap();
+        f3_uint32_builder.append_value(5);
+        // tbl.named_struct.uint32
+        let f3_products_builder = f3_builder.field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(2).unwrap();
+        {
+            let f3_field_products_item_builder = f3_products_builder.values()
+                .as_any_mut()
+                .downcast_mut::<StructBuilder>().unwrap();
+            let qty_builder = f3_field_products_item_builder.field_builder::<Int32Builder>(0).unwrap();
+            qty_builder.append_value(1);
+            let name_builder = f3_field_products_item_builder.field_builder::<StringBuilder>(1).unwrap();
+            name_builder.append_value("product1");
+
+            f3_field_products_item_builder.append(true);
+
+            let f3_field_products_item_builder = f3_products_builder.values()
+                .as_any_mut()
+                .downcast_mut::<StructBuilder>().unwrap();
+            let qty_builder = f3_field_products_item_builder.field_builder::<Int32Builder>(0).unwrap();
+            qty_builder.append_value(1);
+            let name_builder = f3_field_products_item_builder.field_builder::<StringBuilder>(1).unwrap();
+            name_builder.append_value("product1");
+            f3_field_products_item_builder.append(true);
+
+        }
+        f3_products_builder.append(true);
+        f3_builder.append(true);
+
+        let f3_arr = f3_builder.finish();
+
+        let row =  StructArray::new(complete_schema.fields.clone(), vec![
+            // 1
+            Arc::new(f0_arr),
+            Arc::new(f1_arr),
+            Arc::new(f2_arr),
+            Arc::new(f3_arr),
+        ], None);
+        let initial_table = Arc::new(MemTable::try_new(complete_schema.clone(), vec![
+            vec![RecordBatch::from(row)]
+        ])?);
+
+        ctx.register_table("tbl", initial_table.clone()).unwrap();
+        let df = ctx.sql(r#"
+            select
+                get_field(struct1, 'tags') as tags,
+                get_field(array_element(list_struct, 0), 'int32') as f2
+            from
+                tbl;
+        "#)
+            .await.unwrap();
+
+        let df_plan = df.clone().logical_plan().clone();
+        // info!("df_plan: {:?}", df_plan);
+
+        let optimizer = Optimizer::with_rules(vec![Arc::new(OptimizeProjections::new())]);
+        let optimized_plan =
+            optimizer.optimize(df_plan, &OptimizerContext::new(), |_, _|{})?;
+        info!("df_plan: {:?}", optimized_plan);
+
+        info!("logical = {}", logical_plan_str(&df));
+        info!("physical = {}", physical_plan_str(&df).await);
+        df.show().await?;
+        Ok(())
+    }
+
 }
 
