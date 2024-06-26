@@ -158,6 +158,18 @@ pub trait TableProvider: Sync + Send {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
+    async fn scan_with_exprs(
+        &self,
+        state: &SessionState,
+        projection: Option<&Vec<usize>>,
+        _projection_exprs: &[Expr],
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.scan(state, projection, filters, limit).await
+    }
+
+
     /// Specify if DataFusion should provide filter expressions to the
     /// TableProvider to apply *during* the scan.
     ///

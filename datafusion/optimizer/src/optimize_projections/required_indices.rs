@@ -17,10 +17,14 @@
 
 //! [`RequiredIndicies`] helper for OptimizeProjection
 
+use std::collections::HashMap;
+use log::trace;
 use crate::optimize_projections::outer_columns;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Column, DFSchemaRef, Result};
+use datafusion_common::deep::fix_possible_field_accesses;
 use datafusion_expr::{Expr, LogicalPlan};
+use crate::optimize_projections::required_indices_deep::{append_column, expr_to_deep_columns};
 
 /// Represents columns in a schema which are required (used) by a plan node
 ///
@@ -38,6 +42,8 @@ use datafusion_expr::{Expr, LogicalPlan};
 pub(super) struct RequiredIndicies {
     /// The indices of the required columns in the
     indices: Vec<usize>,
+    /// The path to leaf fields in the specified columns
+    deep_indices: HashMap<usize, Vec<String>>,
     /// If putting a projection above children is beneficial for the parent.
     /// Defaults to false.
     projection_beneficial: bool,
@@ -53,14 +59,17 @@ impl RequiredIndicies {
     pub fn new_for_all_exprs(plan: &LogicalPlan) -> Self {
         Self {
             indices: (0..plan.schema().fields().len()).collect(),
+            deep_indices: HashMap::new(),
             projection_beneficial: false,
         }
     }
 
     /// Create a new instance with the specified indices as required
     pub fn new_from_indices(indices: Vec<usize>) -> Self {
+        let indices_len = indices.len();
         Self {
             indices,
+            deep_indices: HashMap::new(),
             projection_beneficial: false,
         }
         .compact()
@@ -69,6 +78,11 @@ impl RequiredIndicies {
     /// Convert the instance to its inner indices
     pub fn into_inner(self) -> Vec<usize> {
         self.indices
+    }
+
+    /// Convert the instance to its inner indices
+    pub fn into_inner_deep(self) -> (Vec<usize>, HashMap<usize, Vec<String>>) {
+        (self.indices, self.deep_indices)
     }
 
     /// Set the projection beneficial flag
@@ -113,13 +127,26 @@ impl RequiredIndicies {
     /// * `expr`: An expression for which we want to find necessary field indices.
     fn add_expr(&mut self, input_schema: &DFSchemaRef, expr: &Expr) -> Result<()> {
         // TODO could remove these clones (and visit the expression directly)
-        let mut cols = expr.to_columns()?;
+        let mut cols = expr_to_deep_columns(expr);
         // Get outer-referenced (subquery) columns:
         outer_columns(expr, &mut cols);
         self.indices.reserve(cols.len());
-        for col in cols {
+        for (col, rest) in cols {
             if let Some(idx) = input_schema.maybe_index_of_column(&col) {
+                // get the rest and see whether the column type
+                // we iterate through the rest specifiers and we fix them
+                // that is, if we see something that looks like a get field, but we know the field in the schema
+                // is a map, that means that we need to replace it with *
+                // map_field['val'], projection_rest = ["val"] => projection_rest=["*"]
+                let mut new_rest: Vec<String> = vec![];
+                for tmp in &rest {
+                    let tmp_pieces = tmp.split(".").map(|x|x.to_string()).collect::<Vec<String>>();
+                    let fixed = fix_possible_field_accesses(&input_schema.clone(), idx, &tmp_pieces);
+                    new_rest.push(fixed.join(".").to_string());
+                }
+                trace!(target: "deep", "fix_possible_field_accesses: {:?} {:?}", &rest, &new_rest);
                 self.indices.push(idx);
+                append_column::<usize>(&mut self.deep_indices, &idx, new_rest);
             }
         }
         Ok(())
@@ -168,15 +195,39 @@ impl RequiredIndicies {
     {
         let (l, r): (Vec<usize>, Vec<usize>) =
             self.indices.iter().partition(|&&idx| f(idx));
+
+        let mut ld: HashMap<usize, Vec<String>> = HashMap::new();
+        let mut rd: HashMap<usize, Vec<String>> = HashMap::new();
+
+
+        for idx in l.iter() {
+            match self.deep_indices.get(idx) {
+                None => {}
+                Some(xx) => {
+                    ld.insert(*idx, xx.clone());
+                }
+            };
+        }
+
+        for idx in r.iter() {
+            match self.deep_indices.get(idx) {
+                None => {}
+                Some(xx) => {
+                    rd.insert(*idx, xx.clone());
+                }
+            };
+        }
         let projection_beneficial = self.projection_beneficial;
 
         (
             Self {
                 indices: l,
+                deep_indices: ld,
                 projection_beneficial,
             },
             Self {
                 indices: r,
+                deep_indices: rd,
                 projection_beneficial,
             },
         )
@@ -201,6 +252,26 @@ impl RequiredIndicies {
         F: Fn(usize) -> usize,
     {
         self.map_indices(f).into_inner()
+    }
+
+    /// Apply the given function `f` to each index in this instance, returning
+    /// the mapped indices
+    pub fn into_mapped_indices_deep<F, F2>(self, f: F, f2: F2) -> (Vec<usize>, HashMap<usize, Vec<String>>)
+        where
+            F:  Fn(usize) -> usize,
+            F2: Fn(usize) -> Vec<String>,
+    {
+        //self.map_indices(f).into_inner()
+        let mut out_indices: Vec<usize> = vec![];
+        let mut out_indices_deep: HashMap<usize, Vec<String>> = HashMap::new();
+
+        for idx in self.indices.iter() {
+            let nidx = f(*idx);
+            let nvec = f2(*idx);
+            out_indices.push(nidx);
+            out_indices_deep.insert(nidx, nvec);
+        }
+        (out_indices, out_indices_deep)
     }
 
     /// Returns the `Expr`s from `exprs` that are at the indices in this instance
