@@ -308,23 +308,40 @@ fn try_rewrite_record_batch(
                         };
                         let src_offset_buffer = src_map.offsets().clone();
 
-                        let (tmp_array, tmp_field) = recurse_field(
-                            dst_inner.clone(),
-                            src_inner.clone(),
+                        let (tmp_values_array, tmp_values_field) = recurse_field(
+                            dst_inner_f[1].clone(),
+                            src_inner_f[1].clone(),
                             src_map.values().clone(),
                             num_rows,
                             fill_missing_source_fields,
                             error_on_missing_source_fields
                         )?;
-                        let out_arr = MapArray::try_new(
-                            tmp_field.clone(),
+
+                        // re-build map from keys and values after recursing only on the values
+                        let entry_struct = StructArray::from(vec![
+                            (dst_inner_f[0].clone(), src_map.keys().clone()),
+                            (tmp_values_field, tmp_values_array),
+                        ]);
+
+                        let struct_field = Arc::new(Field::new(
+                            dst_inner.name().clone(),
+                            entry_struct.data_type().clone(),
+                            false,
+                        ));
+                        let out_map = MapArray::try_new(
+                            struct_field.clone(),
                             src_offset_buffer,
-                            as_struct_array(tmp_array.as_ref()).clone(),
+                            entry_struct,
                             src_nulls,
                             *dst_ordered
                         )?;
 
-                        Ok((Arc::new(out_arr), dst_field.clone()))
+                        let map_field = Arc::new(Field::new(
+                            dst_field.name().clone(),
+                            DataType::Map(struct_field.clone(), *dst_ordered),
+                            dst_field.is_nullable()
+                        ));
+                        Ok((Arc::new(out_map), map_field))
                     }
                     _ => unreachable!() // unreachable
                 }
