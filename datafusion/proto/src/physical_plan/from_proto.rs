@@ -533,6 +533,8 @@ pub fn parse_protobuf_file_scan_config(
         file_groups,
         statistics,
         projection,
+        //ADR: FIXME:
+        projection_deep: None,
         limit: proto.limit.as_ref().map(|sl| sl.limit as usize),
         table_partition_cols,
         output_ordering,

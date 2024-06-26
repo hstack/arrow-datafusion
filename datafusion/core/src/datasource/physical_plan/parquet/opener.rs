@@ -17,6 +17,7 @@
 
 //! [`ParquetOpener`] for opening Parquet files
 
+use std::collections::HashMap;
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningPredicate;
 use crate::datasource::physical_plan::parquet::row_groups::RowGroupAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::{
@@ -31,16 +32,20 @@ use arrow_schema::{ArrowError, SchemaRef};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::{StreamExt, TryStreamExt};
-use log::debug;
+use log::{debug, info};
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use std::sync::Arc;
+// use parquet::schema::types::SchemaDescriptor;
+// use datafusion_common::DataFusionError;
+use datafusion_common::deep::{generate_leaf_paths, has_deep_projection, rewrite_schema};
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
     pub partition_index: usize,
     pub projection: Arc<[usize]>,
+    pub projection_deep: Arc<HashMap<usize, Vec<String>>>,
     pub batch_size: usize,
     pub limit: Option<usize>,
     pub predicate: Option<Arc<dyn PhysicalExpr>>,
@@ -76,7 +81,20 @@ impl FileOpener for ParquetOpener {
 
         let batch_size = self.batch_size;
         let projection = self.projection.clone();
-        let projected_schema = SchemaRef::from(self.table_schema.project(&projection)?);
+        let projection_vec = projection.as_ref().iter().map(|i| *i).collect::<Vec<usize>>();
+        info!("ParquetOpener::open projection={:?}", projection);
+        // FIXME @HStack: ADR: why do we need to do this ? our function needs another param maybe ?
+        // In the case when the projections requested are empty, we should return an empty schema
+        let projected_schema = if projection_vec.len() == 0 {
+            SchemaRef::from(self.table_schema.project(&projection)?)
+        } else {
+            rewrite_schema(
+                self.table_schema.clone(),
+                &projection_vec,
+                self.projection_deep.as_ref()
+            )
+        };
+        let projection_deep = self.projection_deep.clone();
         let schema_adapter = self.schema_adapter_factory.create(projected_schema);
         let predicate = self.predicate.clone();
         let pruning_predicate = self.pruning_predicate.clone();
@@ -91,6 +109,7 @@ impl FileOpener for ParquetOpener {
         let enable_bloom_filter = self.enable_bloom_filter;
         let limit = self.limit;
 
+
         Ok(Box::pin(async move {
             let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
             let mut builder =
@@ -102,11 +121,32 @@ impl FileOpener for ParquetOpener {
             let (schema_mapping, adapted_projections) =
                 schema_adapter.map_schema(&file_schema)?;
 
-            let mask = ProjectionMask::roots(
-                builder.parquet_schema(),
-                adapted_projections.iter().cloned(),
-            );
-
+            // let mask = ProjectionMask::roots(
+            //     builder.parquet_schema(),
+            //     adapted_projections.iter().cloned(),
+            // );
+            let mask = if has_deep_projection(Some(projection_deep.clone().as_ref())) {
+                let leaves = generate_leaf_paths(
+                    table_schema.clone(),
+                    builder.parquet_schema(),
+                    &projection_vec,
+                    projection_deep.clone().as_ref()
+                );
+                info!("ParquetOpener::open, using deep projection parquet leaves: {:?}", leaves.clone());
+                // let tmp = builder.parquet_schema();
+                // for (i, col) in tmp.columns().iter().enumerate() {
+                //     info!("  {}  {}= {:?}", i, col.path(), col);
+                // }
+                ProjectionMask::leaves(
+                    builder.parquet_schema(),
+                    leaves,
+                )
+            } else {
+                ProjectionMask::roots(
+                    builder.parquet_schema(),
+                    adapted_projections.iter().cloned(),
+                )
+            };
             // Filter pushdown: evaluate predicates during scan
             if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
                 let row_filter = row_filter::build_row_filter(

@@ -1,9 +1,11 @@
 use crate::datasource::schema_adapter::{SchemaAdapter, SchemaMapper};
 use arrow_array::RecordBatch;
 use arrow_schema::{Fields, Schema, SchemaRef};
-use datafusion_common::deep::{can_rewrite_field, try_rewrite_record_batch};
+use datafusion_common::deep::{can_rewrite_field, try_rewrite_record_batch, try_rewrite_record_batch_with_mappings};
 use datafusion_common::plan_err;
 use std::sync::Arc;
+use log::info;
+// use arrow::compute::can_cast_types;
 
 impl NestedSchemaAdapter {
     fn map_schema_nested(
@@ -11,12 +13,15 @@ impl NestedSchemaAdapter {
         fields: &Fields,
     ) -> datafusion_common::Result<(Arc<NestedSchemaMapping>, Vec<usize>)> {
         let mut projection = Vec::with_capacity(fields.len());
+        let mut field_mappings = vec![None; self.table_schema.fields().len()];
+
         // start from the destination fields
-        for (_table_idx, table_field) in self.table_schema.fields.iter().enumerate() {
+        for (table_idx, table_field) in self.table_schema.fields.iter().enumerate() {
             // if the file exists in the source, check if we can rewrite it to the destination,
             // and add it to the projections
             if let Some((file_idx, file_field)) = fields.find(table_field.name()) {
                 if can_rewrite_field(table_field.clone(), file_field.clone(), true) {
+                    field_mappings[table_idx] = Some(projection.len());
                     projection.push(file_idx);
                 } else {
                     return plan_err!(
@@ -31,6 +36,7 @@ impl NestedSchemaAdapter {
         Ok((
             Arc::new(NestedSchemaMapping {
                 table_schema: self.table_schema.clone(),
+                field_mappings
             }),
             projection,
         ))
@@ -53,24 +59,59 @@ impl SchemaAdapter for NestedSchemaAdapter {
         &self,
         file_schema: &Schema,
     ) -> datafusion_common::Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
-        self.map_schema_nested(file_schema.fields())
-            .map(|(s, v)| (s as Arc<dyn SchemaMapper>, v))
+        // self.map_schema_nested(file_schema.fields())
+        //     .map(|(s, v)| (s as Arc<dyn SchemaMapper>, v))
+        info!("map_schema:  file_schema: {:#?}", file_schema);
+        info!("map_schema: table_schema: {:#?}", self.table_schema);
+        let mut projection = Vec::with_capacity(file_schema.fields().len());
+        let mut field_mappings = vec![None; self.table_schema.fields().len()];
+
+        for (file_idx, file_field) in file_schema.fields.iter().enumerate() {
+            if let Some((table_idx, table_field)) =
+                self.table_schema.fields().find(file_field.name())
+            {
+                match can_rewrite_field(table_field.clone(), file_field.clone(), false) {
+                    true => {
+                        field_mappings[table_idx] = Some(projection.len());
+                        projection.push(file_idx);
+                    }
+                    false => {
+                        return plan_err!(
+                            "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
+                            file_field.name(),
+                            file_field.data_type(),
+                            table_field.data_type()
+                        )
+                    }
+                }
+            }
+        }
+
+        Ok((
+            Arc::new(NestedSchemaMapping {
+                table_schema: self.table_schema.clone(),
+                field_mappings,
+            }),
+            projection,
+        ))
     }
 }
 
 #[derive(Debug)]
 pub struct NestedSchemaMapping {
     table_schema: SchemaRef,
+    field_mappings: Vec<Option<usize>>,
 }
 
 impl SchemaMapper for NestedSchemaMapping {
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch> {
-        let record_batch = try_rewrite_record_batch(
+        let record_batch = try_rewrite_record_batch_with_mappings(
             batch.schema(),
             batch,
             self.table_schema.clone(),
-            true,
-            false,
+            // FIXME: @HStack ADR: will this break delta tests ?
+            // There are some cases
+            self.field_mappings.clone(),
         )?;
         Ok(record_batch)
     }

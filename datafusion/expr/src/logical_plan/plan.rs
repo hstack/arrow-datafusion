@@ -2467,7 +2467,7 @@ impl TableScan {
                 });
             let new_projection = (0..projection_clone.len()).collect::<Vec<usize>>();
             let inner_projected_schema = projected_schema.inner().clone();
-            let new_inner_projected_schema = rewrite_schema(inner_projected_schema, new_projection, new_projection_deep);
+            let new_inner_projected_schema = rewrite_schema(inner_projected_schema, &new_projection, &new_projection_deep);
             let mut new_projected_schema_df = DFSchema::new_with_metadata(
                 new_inner_projected_schema.fields().iter()
                     .map(|fi| {
