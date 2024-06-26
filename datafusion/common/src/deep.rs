@@ -62,6 +62,284 @@ pub fn data_type_recurs(dt: &DataType) -> bool {
     }
 }
 
+fn cast_df(array: &dyn Array, to_type: &DataType) -> crate::Result<ArrayRef> {
+    let tmp = cast(array, to_type);
+    let tmp2: crate::Result<ArrayRef> = tmp.map_err(|ae| ae.into());
+    return tmp2;
+}
+
+// called for fields - does the name resolution
+pub fn rewrite_record_batch_fields(
+    dst_fields: &Fields,
+    src_fields: &Fields,
+    arrays: Vec<ArrayRef>,
+    num_rows: usize,
+    fill_missing_source_fields: bool,
+    error_on_missing_source_fields: bool,
+) -> crate::Result<(Vec<ArrayRef>, Vec<FieldRef>)> {
+    let mut out_arrays: Vec<ArrayRef> = vec![];
+    let mut out_fields: Vec<FieldRef> = vec![];
+    for i in 0..dst_fields.len() {
+        let dst_field = dst_fields[i].clone();
+        let dst_name = dst_field.name();
+
+        let src_field_opt = src_fields
+            .iter()
+            .enumerate()
+            .find(|(_idx, b)| b.name() == dst_name);
+
+        // if the field exists in the source
+        if src_field_opt.is_some() {
+            let (src_idx, src_field) = src_field_opt.unwrap();
+            let src_field = src_field.clone();
+            let src_arr = arrays[src_idx].clone();
+            let (tmp_array, tmp_field) = rewrite_record_batch_field(
+                dst_field,
+                src_field,
+                src_arr,
+                num_rows,
+                fill_missing_source_fields,
+                error_on_missing_source_fields,
+            )?;
+            out_arrays.push(tmp_array);
+            out_fields.push(tmp_field);
+        } else {
+            if fill_missing_source_fields {
+                let tmp_array = new_null_array(dst_field.data_type(), num_rows);
+                out_arrays.push(tmp_array);
+                out_fields.push(dst_field);
+            } else if error_on_missing_source_fields {
+                return Err(crate::DataFusionError::Internal(format!(
+                    "field {dst_name} not found in source"
+                )));
+            }
+        }
+    }
+    Ok((out_arrays, out_fields))
+}
+
+pub fn rewrite_record_batch_field(
+    dst_field: FieldRef,
+    src_field: FieldRef,
+    src_array: ArrayRef,
+    num_rows: usize,
+    fill_missing_source_fields: bool,
+    error_on_missing_source_fields: bool,
+) -> crate::Result<(ArrayRef, FieldRef)> {
+    let arrow_cast_available =
+        can_cast_types(src_field.data_type(), dst_field.data_type());
+    if arrow_cast_available {
+        let casted_array = cast_df(src_array.as_ref(), dst_field.data_type())?;
+        return Ok((casted_array, dst_field.clone()));
+    }
+    match (src_field.data_type(), dst_field.data_type()) {
+        (DataType::List(src_inner), DataType::List(dst_inner)) => {
+            if data_type_recurs(src_field.data_type()) {
+                let src_array_clone = src_array.clone();
+
+                let src_inner_list_array =
+                    as_generic_list_array::<i32>(src_array_clone.as_ref()).clone();
+                let src_offset_buffer = src_inner_list_array.offsets().clone();
+                let src_nulls = match src_inner_list_array.nulls() {
+                    None => None,
+                    Some(x) => Some(x.clone()),
+                };
+                let (values, field) = rewrite_record_batch_field(
+                    dst_inner.clone(),
+                    src_inner.clone(),
+                    src_inner_list_array.values().clone(),
+                    num_rows,
+                    fill_missing_source_fields,
+                    error_on_missing_source_fields,
+                )?;
+                let nlarr = ListArray::try_new(
+                    field.clone(),
+                    src_offset_buffer,
+                    values,
+                    src_nulls,
+                );
+                let list_field = Arc::new(Field::new(
+                    dst_field.name().clone(),
+                    DataType::List(field.clone()),
+                    dst_field.is_nullable(),
+                ));
+
+                Ok((Arc::new(nlarr.unwrap()), list_field))
+            } else {
+                let casted_array =
+                    cast_df(src_array.as_ref(), dst_field.data_type())?;
+                return Ok((casted_array, dst_field.clone()));
+            }
+        }
+        (
+            DataType::FixedSizeList(src_inner, src_sz),
+            DataType::FixedSizeList(dst_inner, dst_sz),
+        ) => {
+            if src_sz != dst_sz {
+                // Let Arrow do its thing, it's going to error
+                let casted_array =
+                    cast_df(src_array.as_ref(), dst_field.data_type())?;
+                return Ok((casted_array, dst_field.clone()));
+            }
+            if data_type_recurs(src_field.data_type()) {
+                let tmp = src_array.clone();
+                let src_inner_list_array =
+                    as_fixed_size_list_array(tmp.as_ref()).clone();
+                let src_nulls = match src_inner_list_array.nulls() {
+                    None => None,
+                    Some(x) => Some(x.clone()),
+                };
+                let (values, field) = rewrite_record_batch_field(
+                    dst_inner.clone(),
+                    src_inner.clone(),
+                    src_inner_list_array.values().clone(),
+                    num_rows,
+                    fill_missing_source_fields,
+                    error_on_missing_source_fields,
+                )?;
+
+                let nlarr = FixedSizeListArray::try_new(
+                    field.clone(),
+                    *dst_sz,
+                    values,
+                    src_nulls,
+                );
+                let list_field = Arc::new(Field::new(
+                    dst_field.name().clone(),
+                    DataType::FixedSizeList(field.clone(), *dst_sz),
+                    dst_field.is_nullable(),
+                ));
+
+                Ok((Arc::new(nlarr.unwrap()), list_field))
+            } else {
+                let casted_array =
+                    cast_df(src_array.as_ref(), dst_field.data_type())?;
+                return Ok((casted_array, dst_field.clone()));
+            }
+        }
+        (DataType::LargeList(src_inner), DataType::LargeList(dst_inner)) => {
+            if data_type_recurs(src_field.data_type()) {
+                let tmp = src_array.clone();
+                let src_inner_list_array =
+                    as_generic_list_array::<i64>(tmp.as_ref()).clone();
+                let src_offset_buffer = src_inner_list_array.offsets().clone();
+                let src_nulls = match src_inner_list_array.nulls() {
+                    None => None,
+                    Some(x) => Some(x.clone()),
+                };
+                let (values, field) = rewrite_record_batch_field(
+                    dst_inner.clone(),
+                    src_inner.clone(),
+                    src_inner_list_array.values().clone(),
+                    num_rows,
+                    fill_missing_source_fields,
+                    error_on_missing_source_fields,
+                )?;
+
+                let nlarr = LargeListArray::try_new(
+                    field.clone(),
+                    src_offset_buffer,
+                    values,
+                    src_nulls,
+                );
+                let list_field = Arc::new(Field::new(
+                    dst_field.name().clone(),
+                    DataType::LargeList(field.clone()),
+                    dst_field.is_nullable(),
+                ));
+
+                Ok((Arc::new(nlarr.unwrap()), list_field))
+            } else {
+                let casted_array =
+                    cast_df(src_array.as_ref(), dst_field.data_type())?;
+                return Ok((casted_array, dst_field.clone()));
+            }
+        }
+
+        (DataType::Map(src_inner, _), DataType::Map(dst_inner, dst_ordered)) => {
+            match (src_inner.data_type(), dst_inner.data_type()) {
+                (DataType::Struct(src_inner_f), DataType::Struct(dst_inner_f)) => {
+                    let src_map = as_map_array(src_array.as_ref())?;
+                    let src_nulls = match src_map.nulls() {
+                        None => None,
+                        Some(x) => Some(x.clone()),
+                    };
+                    let src_offset_buffer = src_map.offsets().clone();
+
+                    let (tmp_values_array, tmp_values_field) = rewrite_record_batch_field(
+                        dst_inner_f[1].clone(),
+                        src_inner_f[1].clone(),
+                        src_map.values().clone(),
+                        num_rows,
+                        fill_missing_source_fields,
+                        error_on_missing_source_fields,
+                    )?;
+                    // re-build map from keys and values after recursing only on the values
+                    let entry_struct = StructArray::from(vec![
+                        (dst_inner_f[0].clone(), src_map.keys().clone()),
+                        (tmp_values_field, tmp_values_array),
+                    ]);
+
+                    let struct_field = Arc::new(Field::new(
+                        dst_inner.name().clone(),
+                        entry_struct.data_type().clone(),
+                        false,
+                    ));
+
+                    let out_map = MapArray::try_new(
+                        struct_field.clone(),
+                        src_offset_buffer,
+                        entry_struct,
+                        src_nulls,
+                        *dst_ordered,
+                    )?;
+                    let map_field = Arc::new(Field::new(
+                        dst_field.name().clone(),
+                        DataType::Map(struct_field.clone(), *dst_ordered),
+                        dst_field.is_nullable(),
+                    ));
+
+                    Ok((Arc::new(out_map), map_field))
+                }
+                _ => unreachable!(), // unreachable
+            }
+        }
+
+        (DataType::Struct(src_inner), DataType::Struct(dst_inner)) => {
+            let src_struct_array = as_struct_array(src_array.as_ref());
+            let src_nulls = match src_struct_array.nulls() {
+                None => None,
+                Some(x) => Some(x.clone()),
+            };
+            let src_columns = src_struct_array
+                .columns()
+                .iter()
+                .map(|a| a.clone())
+                .collect::<Vec<_>>();
+            let (dst_columns, dst_fields) = rewrite_record_batch_fields(
+                dst_inner,
+                src_inner,
+                src_columns,
+                num_rows,
+                fill_missing_source_fields,
+                error_on_missing_source_fields,
+            )?;
+            let struct_array =
+                StructArray::try_new(dst_inner.clone(), dst_columns, src_nulls)
+                    .map_err(|ae| DataFusionError::from(ae))?;
+            let struct_field = Field::new_struct(
+                dst_field.name(),
+                dst_fields,
+                dst_field.is_nullable(),
+            );
+            Ok((Arc::new(struct_array), Arc::new(struct_field)))
+        }
+        _ => {
+            panic!()
+        }
+    }
+}
+
 pub fn try_rewrite_record_batch(
     src: SchemaRef,
     src_record_batch: RecordBatch,
@@ -69,285 +347,9 @@ pub fn try_rewrite_record_batch(
     fill_missing_source_fields: bool,
     error_on_missing_source_fields: bool,
 ) -> crate::Result<RecordBatch> {
-    // called for fields - does the name resolution
-    fn recurse_fields(
-        dst_fields: &Fields,
-        src_fields: &Fields,
-        arrays: Vec<ArrayRef>,
-        num_rows: usize,
-        fill_missing_source_fields: bool,
-        error_on_missing_source_fields: bool,
-    ) -> crate::Result<(Vec<ArrayRef>, Vec<FieldRef>)> {
-        let mut out_arrays: Vec<ArrayRef> = vec![];
-        let mut out_fields: Vec<FieldRef> = vec![];
-        for i in 0..dst_fields.len() {
-            let dst_field = dst_fields[i].clone();
-            let dst_name = dst_field.name();
-
-            let src_field_opt = src_fields
-                .iter()
-                .enumerate()
-                .find(|(_idx, b)| b.name() == dst_name);
-
-            // if the field exists in the source
-            if src_field_opt.is_some() {
-                let (src_idx, src_field) = src_field_opt.unwrap();
-                let src_field = src_field.clone();
-                let src_arr = arrays[src_idx].clone();
-                let (tmp_array, tmp_field) = recurse_field(
-                    dst_field,
-                    src_field,
-                    src_arr,
-                    num_rows,
-                    fill_missing_source_fields,
-                    error_on_missing_source_fields,
-                )?;
-                out_arrays.push(tmp_array);
-                out_fields.push(tmp_field);
-            } else {
-                if fill_missing_source_fields {
-                    let tmp_array = new_null_array(dst_field.data_type(), num_rows);
-                    out_arrays.push(tmp_array);
-                    out_fields.push(dst_field);
-                } else if error_on_missing_source_fields {
-                    return Err(crate::DataFusionError::Internal(format!(
-                        "field {dst_name} not found in source"
-                    )));
-                }
-            }
-        }
-        Ok((out_arrays, out_fields))
-    }
-    fn cast_df(array: &dyn Array, to_type: &DataType) -> crate::Result<ArrayRef> {
-        let tmp = cast(array, to_type);
-        let tmp2: crate::Result<ArrayRef> = tmp.map_err(|ae| ae.into());
-        return tmp2;
-    }
-
-    fn recurse_field(
-        dst_field: FieldRef,
-        src_field: FieldRef,
-        src_array: ArrayRef,
-        num_rows: usize,
-        fill_missing_source_fields: bool,
-        error_on_missing_source_fields: bool,
-    ) -> crate::Result<(ArrayRef, FieldRef)> {
-        let arrow_cast_available =
-            can_cast_types(src_field.data_type(), dst_field.data_type());
-        if arrow_cast_available {
-            let casted_array = cast_df(src_array.as_ref(), dst_field.data_type())?;
-            return Ok((casted_array, dst_field.clone()));
-        }
-        match (src_field.data_type(), dst_field.data_type()) {
-            (DataType::List(src_inner), DataType::List(dst_inner)) => {
-                if data_type_recurs(src_field.data_type()) {
-                    let src_array_clone = src_array.clone();
-
-                    let src_inner_list_array =
-                        as_generic_list_array::<i32>(src_array_clone.as_ref()).clone();
-                    let src_offset_buffer = src_inner_list_array.offsets().clone();
-                    let src_nulls = match src_inner_list_array.nulls() {
-                        None => None,
-                        Some(x) => Some(x.clone()),
-                    };
-                    let (values, field) = recurse_field(
-                        dst_inner.clone(),
-                        src_inner.clone(),
-                        src_inner_list_array.values().clone(),
-                        num_rows,
-                        fill_missing_source_fields,
-                        error_on_missing_source_fields,
-                    )?;
-                    let nlarr = ListArray::try_new(
-                        field.clone(),
-                        src_offset_buffer,
-                        values,
-                        src_nulls,
-                    );
-                    let list_field = Arc::new(Field::new(
-                        dst_field.name().clone(),
-                        DataType::List(field.clone()),
-                        dst_field.is_nullable(),
-                    ));
-
-                    Ok((Arc::new(nlarr.unwrap()), list_field))
-                } else {
-                    let casted_array =
-                        cast_df(src_array.as_ref(), dst_field.data_type())?;
-                    return Ok((casted_array, dst_field.clone()));
-                }
-            }
-            (
-                DataType::FixedSizeList(src_inner, src_sz),
-                DataType::FixedSizeList(dst_inner, dst_sz),
-            ) => {
-                if src_sz != dst_sz {
-                    // Let Arrow do its thing, it's going to error
-                    let casted_array =
-                        cast_df(src_array.as_ref(), dst_field.data_type())?;
-                    return Ok((casted_array, dst_field.clone()));
-                }
-                if data_type_recurs(src_field.data_type()) {
-                    let tmp = src_array.clone();
-                    let src_inner_list_array =
-                        as_fixed_size_list_array(tmp.as_ref()).clone();
-                    let src_nulls = match src_inner_list_array.nulls() {
-                        None => None,
-                        Some(x) => Some(x.clone()),
-                    };
-                    let (values, field) = recurse_field(
-                        dst_inner.clone(),
-                        src_inner.clone(),
-                        src_inner_list_array.values().clone(),
-                        num_rows,
-                        fill_missing_source_fields,
-                        error_on_missing_source_fields,
-                    )?;
-
-                    let nlarr = FixedSizeListArray::try_new(
-                        field.clone(),
-                        *dst_sz,
-                        values,
-                        src_nulls,
-                    );
-                    let list_field = Arc::new(Field::new(
-                        dst_field.name().clone(),
-                        DataType::FixedSizeList(field.clone(), *dst_sz),
-                        dst_field.is_nullable(),
-                    ));
-
-                    Ok((Arc::new(nlarr.unwrap()), list_field))
-                } else {
-                    let casted_array =
-                        cast_df(src_array.as_ref(), dst_field.data_type())?;
-                    return Ok((casted_array, dst_field.clone()));
-                }
-            }
-            (DataType::LargeList(src_inner), DataType::LargeList(dst_inner)) => {
-                if data_type_recurs(src_field.data_type()) {
-                    let tmp = src_array.clone();
-                    let src_inner_list_array =
-                        as_generic_list_array::<i64>(tmp.as_ref()).clone();
-                    let src_offset_buffer = src_inner_list_array.offsets().clone();
-                    let src_nulls = match src_inner_list_array.nulls() {
-                        None => None,
-                        Some(x) => Some(x.clone()),
-                    };
-                    let (values, field) = recurse_field(
-                        dst_inner.clone(),
-                        src_inner.clone(),
-                        src_inner_list_array.values().clone(),
-                        num_rows,
-                        fill_missing_source_fields,
-                        error_on_missing_source_fields,
-                    )?;
-
-                    let nlarr = LargeListArray::try_new(
-                        field.clone(),
-                        src_offset_buffer,
-                        values,
-                        src_nulls,
-                    );
-                    let list_field = Arc::new(Field::new(
-                        dst_field.name().clone(),
-                        DataType::LargeList(field.clone()),
-                        dst_field.is_nullable(),
-                    ));
-
-                    Ok((Arc::new(nlarr.unwrap()), list_field))
-                } else {
-                    let casted_array =
-                        cast_df(src_array.as_ref(), dst_field.data_type())?;
-                    return Ok((casted_array, dst_field.clone()));
-                }
-            }
-
-            (DataType::Map(src_inner, _), DataType::Map(dst_inner, dst_ordered)) => {
-                match (src_inner.data_type(), dst_inner.data_type()) {
-                    (DataType::Struct(src_inner_f), DataType::Struct(dst_inner_f)) => {
-                        let src_map = as_map_array(src_array.as_ref())?;
-                        let src_nulls = match src_map.nulls() {
-                            None => None,
-                            Some(x) => Some(x.clone()),
-                        };
-                        let src_offset_buffer = src_map.offsets().clone();
-
-                        let (tmp_values_array, tmp_values_field) = recurse_field(
-                            dst_inner_f[1].clone(),
-                            src_inner_f[1].clone(),
-                            src_map.values().clone(),
-                            num_rows,
-                            fill_missing_source_fields,
-                            error_on_missing_source_fields,
-                        )?;
-                        // re-build map from keys and values after recursing only on the values
-                        let entry_struct = StructArray::from(vec![
-                            (dst_inner_f[0].clone(), src_map.keys().clone()),
-                            (tmp_values_field, tmp_values_array),
-                        ]);
-
-                        let struct_field = Arc::new(Field::new(
-                            dst_inner.name().clone(),
-                            entry_struct.data_type().clone(),
-                            false,
-                        ));
-
-                        let out_map = MapArray::try_new(
-                            struct_field.clone(),
-                            src_offset_buffer,
-                            entry_struct,
-                            src_nulls,
-                            *dst_ordered,
-                        )?;
-                        let map_field = Arc::new(Field::new(
-                            dst_field.name().clone(),
-                            DataType::Map(struct_field.clone(), *dst_ordered),
-                            dst_field.is_nullable(),
-                        ));
-
-                        Ok((Arc::new(out_map), map_field))
-                    }
-                    _ => unreachable!(), // unreachable
-                }
-            }
-
-            (DataType::Struct(src_inner), DataType::Struct(dst_inner)) => {
-                let src_struct_array = as_struct_array(src_array.as_ref());
-                let src_nulls = match src_struct_array.nulls() {
-                    None => None,
-                    Some(x) => Some(x.clone()),
-                };
-                let src_columns = src_struct_array
-                    .columns()
-                    .iter()
-                    .map(|a| a.clone())
-                    .collect::<Vec<_>>();
-                let (dst_columns, dst_fields) = recurse_fields(
-                    dst_inner,
-                    src_inner,
-                    src_columns,
-                    num_rows,
-                    fill_missing_source_fields,
-                    error_on_missing_source_fields,
-                )?;
-                let struct_array =
-                    StructArray::try_new(dst_inner.clone(), dst_columns, src_nulls)
-                        .map_err(|ae| DataFusionError::from(ae))?;
-                let struct_field = Field::new_struct(
-                    dst_field.name(),
-                    dst_fields,
-                    dst_field.is_nullable(),
-                );
-                Ok((Arc::new(struct_array), Arc::new(struct_field)))
-            }
-            _ => {
-                panic!()
-            }
-        }
-    }
 
     let num_rows = src_record_batch.num_rows();
-    let (final_columns, final_fields) = recurse_fields(
+    let (final_columns, final_fields) = rewrite_record_batch_fields(
         dst.fields(),
         src.fields(),
         src_record_batch.columns().into(),
@@ -355,6 +357,51 @@ pub fn try_rewrite_record_batch(
         fill_missing_source_fields,
         error_on_missing_source_fields,
     )?;
+
+    let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
+    let schema = Arc::new(Schema::new(final_fields));
+    let record_batch =
+        RecordBatch::try_new_with_options(schema, final_columns, &options)?;
+    Ok(record_batch)
+}
+
+pub fn try_rewrite_record_batch_with_mappings(
+    src: SchemaRef,
+    src_record_batch: RecordBatch,
+    dst: SchemaRef,
+    mappings: Vec<Option<usize>>,
+) -> crate::Result<RecordBatch> {
+    info!("mappings: {:?}", mappings);
+    info!("dst: {:#?}", dst.clone());
+    let src_record_batch_cols = src_record_batch.columns().to_vec();
+    let num_rows = src_record_batch.num_rows();
+    let field_vecs = dst.fields()
+        .iter()
+        .zip(mappings)
+        .map(|(field, src_idx)| match src_idx {
+            Some(batch_idx) => {
+                let arr = src_record_batch_cols[batch_idx].clone();
+                let src_field = Arc::new(src.field(batch_idx).clone());
+                rewrite_record_batch_field(field.clone(), src_field, arr, num_rows, false, false)
+            },
+            None => Ok((new_null_array(field.data_type(), num_rows), field.clone())),
+        })
+        .collect::<crate::Result<Vec<(_, _)>, _>>()?;
+
+    let mut final_columns: Vec<ArrayRef> = vec![];
+    let mut final_fields: Vec<FieldRef> = vec![];
+    for (a, f) in field_vecs {
+        final_columns.push(a);
+        final_fields.push(f);
+    }
+    // let (final_columns, final_fields) = rewrite_record_batch_fields(
+    //     dst.fields(),
+    //     src.fields(),
+    //     src_record_batch.columns().into(),
+    //     num_rows,
+    //     fill_missing_source_fields,
+    //     error_on_missing_source_fields,
+    // )?;
 
     let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
     let schema = Arc::new(Schema::new(final_fields));
@@ -473,6 +520,7 @@ pub fn splat_columns(
     projection: &Vec<usize>,
     projection_deep: &HashMap<usize, Vec<String>>,
 ) -> Vec<String> {
+    info!("DEEP: {:#?}", projection_deep);
     let mut out: Vec<String> = vec![];
     for pi in projection.iter() {
         let f = src.field(*pi);
@@ -570,7 +618,15 @@ fn path_prefix_exists(filters: &Vec<String>, path: &String) -> bool {
     })
 }
 
-pub fn fix_possible_field_accesses(schema: &DFSchemaRef, field_idx: usize, rest: Vec<String>) -> Vec<String> {
+fn path_included(filters: &Vec<String>, path: &String) -> bool {
+    filters.iter().any(|f| {
+        let tmp = path.find(f);
+        tmp.is_some() && tmp.unwrap() == 0
+    })
+}
+
+
+pub fn fix_possible_field_accesses(schema: &DFSchemaRef, field_idx: usize, rest: &Vec<String>) -> Vec<String> {
     let mut field = Arc::new(schema.field(field_idx).clone());
     let mut rest_idx = 0 as usize;
     let mut out = rest.clone();
@@ -629,12 +685,18 @@ pub fn fix_possible_field_accesses(schema: &DFSchemaRef, field_idx: usize, rest:
     out
 }
 
+pub fn is_path_in_filters(filters: &Vec<String>, path: &String) {
+    for filter in filters {
+
+    }
+
+}
 pub fn rewrite_schema(
     src: SchemaRef,
     projection: &Vec<usize>,
     projection_deep: &HashMap<usize, Vec<String>>,
 ) -> SchemaRef {
-    fn rewrite_fields(
+    fn rewrite_schema_fields(
         parent: String,
         src_fields: &Fields,
         filters: &Vec<String>,
@@ -645,7 +707,7 @@ pub fn rewrite_schema(
             let src_field_path = make_path(&parent, src_field.name());
             // info!("rewrite fields: {} = {} {}", i, src_field_name, src_field_path);
 
-            let field_path_included = filters.contains(&src_field_path);
+            let field_path_included = path_included(filters, &src_field_path); //filters.contains(&src_field_path);
             if field_path_included {
                 out_fields.push(src_field.clone());
             } else {
@@ -653,7 +715,7 @@ pub fn rewrite_schema(
                     && path_prefix_exists(filters, &src_field_path)
                 {
                     // info!("recurring for {}", src_field.name().clone());
-                    match rewrite_field(parent.clone(), src_field, filters) {
+                    match rewrite_schema_field(parent.clone(), src_field, filters) {
                         None => {}
                         Some(f) => out_fields.push(f),
                     }
@@ -664,16 +726,16 @@ pub fn rewrite_schema(
         out_fields
     }
 
-    fn rewrite_field(
+    fn rewrite_schema_field(
         parent: String,
         src_field: FieldRef,
         filters: &Vec<String>,
     ) -> Option<FieldRef> {
         let src_field_name = src_field.name();
         let src_field_path = make_path(&parent, src_field_name);
-        // info!("rewrite field: {} = {}", src_field_name, src_field_path);
+        info!("rewrite field: {} = {} ({:?})", src_field_name, src_field_path, filters);
 
-        let field_path_included = filters.contains(&src_field_path);
+        let field_path_included = path_included(filters, &src_field_path); //filters.contains(&src_field_path);
         if field_path_included {
             // info!("  return {} directly ", src_field_path);
             return Some(src_field.clone());
@@ -683,7 +745,7 @@ pub fn rewrite_schema(
             {
                 let out = match src_field.data_type() {
                     DataType::List(src_inner) => {
-                        rewrite_field(
+                        rewrite_schema_field(
                             make_path(&src_field_path, "*"),
                             src_inner.clone(),
                             filters,
@@ -697,7 +759,7 @@ pub fn rewrite_schema(
                             ))
                         })
                     }
-                    DataType::FixedSizeList(src_inner, src_sz) => rewrite_field(
+                    DataType::FixedSizeList(src_inner, src_sz) => rewrite_schema_field(
                         make_path(&src_field_path, "*"),
                         src_inner.clone(),
                         filters,
@@ -710,7 +772,7 @@ pub fn rewrite_schema(
                             src_field.is_nullable(),
                         ))
                     }),
-                    DataType::LargeList(src_inner) => rewrite_field(
+                    DataType::LargeList(src_inner) => rewrite_schema_field(
                         make_path(&src_field_path, "*"),
                         src_inner.clone(),
                         filters,
@@ -728,12 +790,13 @@ pub fn rewrite_schema(
                         {
                             let map_key_field = map_entry_fields.get(0).unwrap();
                             let map_value_field = map_entry_fields.get(1).unwrap();
-                            rewrite_field(
+                            rewrite_schema_field(
                                 make_path(&src_field_path, "*"),
                                 map_value_field.clone(),
                                 filters,
                             )
                             .map(|inner| {
+                                info!("XXXXXXXXXXXXX");
                                 Arc::new(Field::new_map(
                                     src_field_name,
                                     map_entry.name().clone(),
@@ -750,7 +813,7 @@ pub fn rewrite_schema(
 
                     DataType::Struct(src_inner) => {
                         let dst_fields =
-                            rewrite_fields(src_field_path.clone(), src_inner, filters);
+                            rewrite_schema_fields(src_field_path.clone(), src_inner, filters);
                         // info!("for struct: {} {} = {:#?}", src_field_name, src_field_path.clone(), dst_fields);
                         if dst_fields.len() > 0 {
                             // info!("return new struct");
@@ -783,12 +846,13 @@ pub fn rewrite_schema(
         projection.clone()
     };
     let splatted = splat_columns(src.clone(), &actual_projection, &projection_deep);
-    // info!("xx rewrite_schema splatted: {:?} {:?} = {:?}", &actual_projection, &projection_deep, splatted);
+    info!("xx rewrite_schema source: {:#?}", src);
+    info!("xx rewrite_schema splatted: {:?} {:?} = {:?}", &actual_projection, &projection_deep, splatted);
     let mut dst_fields: Vec<FieldRef> = vec![];
     for pi in actual_projection.iter() {
         let src_field = src.field(*pi);
         let foutopt =
-            rewrite_field("".to_string(), Arc::new(src_field.clone()), &splatted);
+            rewrite_schema_field("".to_string(), Arc::new(src_field.clone()), &splatted);
         match foutopt {
             None => {}
             Some(fout) => {
@@ -798,7 +862,7 @@ pub fn rewrite_schema(
     }
 
     // let dst_fields = rewrite_fields("".to_string(), src.clone().fields(), &splatted);
-    // info!("rewrite_schema dst: {:#?}", dst_fields);
+    info!("rewrite_schema dst: {:#?}", dst_fields);
     if dst_fields.len() > 0 {
         return Arc::new(Schema::new_with_metadata(dst_fields, src.metadata.clone()));
     }
