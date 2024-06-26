@@ -217,12 +217,18 @@ fn try_rewrite_record_batch(
                         error_on_missing_source_fields,
                     )?;
                     let nlarr = ListArray::try_new(
-                        dst_field.clone(),
+                        field.clone(),
                         src_offset_buffer,
                         values,
                         src_nulls,
                     );
-                    Ok((Arc::new(nlarr.unwrap()), field))
+                    let list_field = Arc::new(Field::new(
+                        dst_field.name().clone(),
+                        DataType::List(field.clone()),
+                        dst_field.is_nullable()
+                    ));
+
+                    Ok((Arc::new(nlarr.unwrap()), list_field))
                 } else {
                     let casted_array = cast_df(src_array.as_ref(), dst_field.data_type())?;
                     return Ok((casted_array, dst_field.clone()));
@@ -286,12 +292,18 @@ fn try_rewrite_record_batch(
                     )?;
 
                     let nlarr = LargeListArray::try_new(
-                        dst_field.clone(),
+                        field.clone(),
                         src_offset_buffer,
                         values,
                         src_nulls,
                     );
-                    Ok((Arc::new(nlarr.unwrap()), field))
+                    let list_field = Arc::new(Field::new(
+                        dst_field.name().clone(),
+                        DataType::LargeList(field.clone()),
+                        dst_field.is_nullable()
+                    ));
+
+                    Ok((Arc::new(nlarr.unwrap()), list_field))
                 } else {
                     let casted_array = cast_df(src_array.as_ref(), dst_field.data_type())?;
                     return Ok((casted_array, dst_field.clone()));
