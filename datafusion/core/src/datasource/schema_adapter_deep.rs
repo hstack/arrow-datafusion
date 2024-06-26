@@ -1,9 +1,9 @@
 use crate::datasource::schema_adapter::{SchemaAdapter, SchemaMapper};
 use arrow_array::RecordBatch;
 use arrow_schema::{Fields, Schema, SchemaRef};
+use datafusion_common::deep::{can_rewrite_field, try_rewrite_record_batch};
 use datafusion_common::plan_err;
 use std::sync::Arc;
-use datafusion_common::deep::{can_rewrite_field, try_rewrite_record_batch};
 
 impl NestedSchemaAdapter {
     fn map_schema_nested(
@@ -15,9 +15,7 @@ impl NestedSchemaAdapter {
         for (_table_idx, table_field) in self.table_schema.fields.iter().enumerate() {
             // if the file exists in the source, check if we can rewrite it to the destination,
             // and add it to the projections
-            if let Some((file_idx, file_field)) =
-                fields.find(table_field.name())
-            {
+            if let Some((file_idx, file_field)) = fields.find(table_field.name()) {
                 if can_rewrite_field(table_field.clone(), file_field.clone(), true) {
                     projection.push(file_idx);
                 } else {
@@ -67,7 +65,13 @@ pub struct NestedSchemaMapping {
 
 impl SchemaMapper for NestedSchemaMapping {
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch> {
-        let record_batch = try_rewrite_record_batch(batch.schema(), batch, self.table_schema.clone(), true, false)?;
+        let record_batch = try_rewrite_record_batch(
+            batch.schema(),
+            batch,
+            self.table_schema.clone(),
+            true,
+            false,
+        )?;
         Ok(record_batch)
     }
 
@@ -75,125 +79,39 @@ impl SchemaMapper for NestedSchemaMapping {
         &self,
         batch: RecordBatch,
     ) -> datafusion_common::Result<RecordBatch> {
-        try_rewrite_record_batch(batch.schema().clone(), batch, self.table_schema.clone(), false, false)
+        try_rewrite_record_batch(
+            batch.schema().clone(),
+            batch,
+            self.table_schema.clone(),
+            false,
+            false,
+        )
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use arrow_array::builder::{ArrayBuilder, BooleanBuilder, GenericStringBuilder, Int32Builder, ListBuilder, StringBuilder, StructBuilder, UInt32Builder};
+    use crate::dataframe::DataFrame;
+    use crate::datasource::MemTable;
+    use crate::prelude::SessionContext;
+    use arrow_array::builder::{
+        ArrayBuilder, BooleanBuilder, GenericStringBuilder, Int32Builder, ListBuilder,
+        StringBuilder, StructBuilder, UInt32Builder,
+    };
     use arrow_array::{BooleanArray, RecordBatch, StringArray, StructArray, UInt32Array};
     use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
+    use datafusion_common::deep::{
+        rewrite_schema, try_rewrite_record_batch,
+    };
+    use datafusion_optimizer::optimize_projections::OptimizeProjections;
+    use datafusion_optimizer::{Optimizer, OptimizerContext};
+    use datafusion_physical_plan::get_plan_string;
     use log::info;
     use parquet::arrow::parquet_to_arrow_schema;
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
-    use datafusion_common::deep::{can_rewrite, rewrite_schema, try_rewrite_record_batch};
-    use datafusion_optimizer::optimize_projections::OptimizeProjections;
-    use datafusion_optimizer::{Optimizer, OptimizerContext};
-    use datafusion_physical_plan::get_plan_string;
-    use crate::dataframe::DataFrame;
-    use crate::datasource::MemTable;
-    use crate::prelude::SessionContext;
-
-    #[test]
-    fn test_cast() -> crate::error::Result<()> {
-        // source, destination, is_fill_dependent
-        let cases = vec![
-            (
-                Arc::new(Schema::new(vec![
-                    Field::new("i1", DataType::Int32, true),
-                ])),
-
-                Arc::new(Schema::new(vec![
-                    Field::new("i1", DataType::Int8, true),
-                ])),
-                false,
-                true
-            ),
-            (
-                Arc::new(Schema::new(vec![
-                    Field::new("i1", DataType::Int32, true),
-                ])),
-
-                Arc::new(Schema::new(vec![
-                    Field::new("i1", DataType::Struct(Fields::from(vec![
-                        Field::new("s1", DataType::Utf8, true)
-                    ])), true),
-                ])),
-                false,
-                false
-            ),
-            (
-                Arc::new(Schema::new(vec![
-                    Field::new("l1", DataType::List(
-                        Arc::new(Field::new("s1", DataType::Struct(
-                            Fields::from(vec![
-                                Field::new("s1extra1", DataType::Utf8, true),
-                                Field::new("s1extra2", DataType::Utf8, true),
-                                Field::new("s1i2", DataType::Int32, true),
-                                Field::new("s1s1", DataType::Utf8, true),
-                                Field::new("s1m1", DataType::Map(
-                                    Arc::new(
-                                        Field::new(
-                                            "entries",
-                                            DataType::Struct(Fields::from(vec![
-                                                Field::new("key", DataType::Utf8, false),
-                                                Field::new("value", DataType::Utf8, false),
-                                            ])),
-                                            true
-                                        )
-                                    ),
-                                    false,
-                                ), true),
-                                Field::new("s1l1", DataType::List(
-                                    Arc::new(Field::new("s1l1i1", DataType::Int32, true))
-                                ), true),
-                            ]
-                        )), true))
-                    ), true),
-                ])),
-
-                Arc::new(Schema::new(vec![
-                    Field::new("l1", DataType::List(
-                        Arc::new(Field::new("s1", DataType::Struct(
-                            Fields::from(vec![
-                                Field::new("s1s1", DataType::Utf8, true),
-                                Field::new("s1i2", DataType::Int32, true),
-                                Field::new("s1m1", DataType::Map(
-                                    Arc::new(
-                                        Field::new(
-                                            "entries",
-                                            DataType::Struct(Fields::from(vec![
-                                                Field::new("key", DataType::Utf8, false),
-                                                Field::new("value", DataType::Utf8, false),
-                                            ])),
-                                            true
-                                        )
-                                    ),
-                                    false,
-                                ), true),
-                                Field::new("s1l1", DataType::List(
-                                    Arc::new(Field::new("s1l1i1", DataType::Date32, true))
-                                ), true),
-                                // extra field
-                                Field::new("s1ts1", DataType::Time32(TimeUnit::Second), true),
-                            ]
-                            )), true))
-                    ), true),
-                ])),
-                true,
-                true
-            ),
-        ];
-        for (from, to, can_fill, res) in cases.iter() {
-            assert_eq!(can_rewrite(from.clone(), to.clone(), *can_fill), *res, "Wrong result");
-        }
-        Ok(())
-    }
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_rewrite_schema() -> crate::error::Result<()> {
@@ -201,45 +119,41 @@ mod tests {
             Field::new("i1", DataType::Int32, true),
             Field::new(
                 "l1",
-                DataType::List(
-                    Arc::new(Field::new(
-                        "s1",
-                        DataType::Struct(
-                            Fields::from(vec![
-                                Field::new("s1s1", DataType::Utf8, true),
-                                Field::new("s1i2", DataType::Int32, true),
-                                Field::new(
-                                    "s1m1",
-                                    DataType::Map(
-                                        Arc::new(Field::new(
-                                            "entries",
-                                            DataType::Struct(
-                                                Fields::from(vec![
-                                                    Field::new("key", DataType::Utf8, false),
-                                                    Field::new("value", DataType::Utf8, false),
-                                                ])
-                                            ),
-                                            true
-                                        )),
-                                        false,
-                                    ),
-                                    true
-                                ),
-                                Field::new(
-                                    "s1l1",
-                                    DataType::List(
-                                        Arc::new(Field::new("s1l1i1", DataType::Date32, true))
-                                    ),
-                                    true
-                                ),
-                                // extra field
-                                Field::new("s1ts1", DataType::Time32(TimeUnit::Second), true),
-                            ])
+                DataType::List(Arc::new(Field::new(
+                    "s1",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("s1s1", DataType::Utf8, true),
+                        Field::new("s1i2", DataType::Int32, true),
+                        Field::new(
+                            "s1m1",
+                            DataType::Map(
+                                Arc::new(Field::new(
+                                    "entries",
+                                    DataType::Struct(Fields::from(vec![
+                                        Field::new("key", DataType::Utf8, false),
+                                        Field::new("value", DataType::Utf8, false),
+                                    ])),
+                                    true,
+                                )),
+                                false,
+                            ),
+                            true,
                         ),
-                        true
-                    ))
-                ),
-                true
+                        Field::new(
+                            "s1l1",
+                            DataType::List(Arc::new(Field::new(
+                                "s1l1i1",
+                                DataType::Date32,
+                                true,
+                            ))),
+                            true,
+                        ),
+                        // extra field
+                        Field::new("s1ts1", DataType::Time32(TimeUnit::Second), true),
+                    ])),
+                    true,
+                ))),
+                true,
             ),
         ]));
         let out = rewrite_schema(
@@ -247,11 +161,8 @@ mod tests {
             &vec![1],
             &HashMap::from([
                 (0, vec![]),
-                (1, vec![
-                    "*.s1s1".to_string(),
-                    "*.s1l1".to_string()
-                ]),
-            ])
+                (1, vec!["*.s1s1".to_string(), "*.s1l1".to_string()]),
+            ]),
         );
         // info!("out: {:#?}", out);
         Ok(())
@@ -299,7 +210,7 @@ mod tests {
             }
         }
         ";
-        let message_type= r#"
+        let message_type = r#"
             message schema {
                 REQUIRED GROUP struct {
                     REQUIRED BINARY name (UTF8);
@@ -317,19 +228,24 @@ mod tests {
             .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
             .unwrap();
 
-        let arrow_schema = Arc::new(parquet_to_arrow_schema(parquet_schema.as_ref(), None).unwrap());
+        let arrow_schema =
+            Arc::new(parquet_to_arrow_schema(parquet_schema.as_ref(), None).unwrap());
         // println!("schema: {:#?}", arrow_schema);
         let (_idx, ffield) = arrow_schema.fields().find("struct").unwrap();
         let struct_field = ffield.clone();
         let struct_fields = match struct_field.data_type() {
             DataType::Struct(fields) => Some(fields),
-            _ => None
-        }.unwrap();
+            _ => None,
+        }
+        .unwrap();
         println!("struct fields: {:#?}", struct_fields);
 
         let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new();
-        let mut expected_builder = ListBuilder::new(elem_builder)
-            .with_field(Field::new("tag", DataType::Utf8, true));
+        let mut expected_builder = ListBuilder::new(elem_builder).with_field(Field::new(
+            "tag",
+            DataType::Utf8,
+            true,
+        ));
         expected_builder.values().append_value("foo");
         expected_builder.values().append_value("bar");
         expected_builder.append(true);
@@ -340,26 +256,19 @@ mod tests {
         let struct_column = StructArray::new(
             struct_fields.clone(),
             vec![
-                Arc::new(StringArray::from(vec![
-                    "name1",
-                    "name2"
-                ])),
-                Arc::new(BooleanArray::from(vec![
-                    true,
-                    false
-                ])),
-                Arc::new(UInt32Array::from(vec![
-                    1,
-                    2
-                ])),
-                Arc::new(expected)
+                Arc::new(StringArray::from(vec!["name1", "name2"])),
+                Arc::new(BooleanArray::from(vec![true, false])),
+                Arc::new(UInt32Array::from(vec![1, 2])),
+                Arc::new(expected),
             ],
             None,
         );
-        let record_batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(struct_column)]).unwrap();
+        let record_batch =
+            RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(struct_column)])
+                .unwrap();
         // println!("rb: {:#?}", record_batch);
 
-        let message_type= r#"
+        let message_type = r#"
             message schema {
                 REQUIRED GROUP struct {
                     REQUIRED GROUP tags (LIST) {
@@ -373,11 +282,18 @@ mod tests {
         let parquet_schema_2 = parse_message_type(message_type)
             .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
             .unwrap();
-        let arrow_schema_2 = Arc::new(parquet_to_arrow_schema(parquet_schema_2.as_ref(), None).unwrap());
+        let arrow_schema_2 =
+            Arc::new(parquet_to_arrow_schema(parquet_schema_2.as_ref(), None).unwrap());
         println!("arrow_schema_2: {:#?}", arrow_schema_2);
-        let new_rb = try_rewrite_record_batch(arrow_schema.clone(), record_batch, arrow_schema_2.clone(), true, false).unwrap();
+        let new_rb = try_rewrite_record_batch(
+            arrow_schema.clone(),
+            record_batch,
+            arrow_schema_2.clone(),
+            true,
+            false,
+        )
+        .unwrap();
         println!("new_rb: {:#?}", new_rb);
-
 
         Ok(())
     }
@@ -398,7 +314,7 @@ mod tests {
     async fn test_deep_schema() -> crate::error::Result<()> {
         let _ = env_logger::try_init();
 
-        let message_type= r#"
+        let message_type = r#"
             message schema {
                 REQUIRED INT32 id;
                 REQUIRED GROUP struct1 {
@@ -437,12 +353,11 @@ mod tests {
         let parquet_schema = parse_message_type(message_type)
             .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
             .unwrap();
-        {
-
-        }
+        {}
         // return Ok(());
 
-        let complete_schema = Arc::new(parquet_to_arrow_schema(parquet_schema.as_ref(), None).unwrap());
+        let complete_schema =
+            Arc::new(parquet_to_arrow_schema(parquet_schema.as_ref(), None).unwrap());
         // info!("schema: {:#?}", complete_schema.clone());
         // {
         //     let kk = generate_leaf_paths(
@@ -484,8 +399,14 @@ mod tests {
         let f1_uint32_builder = f1_builder.field_builder::<UInt32Builder>(2).unwrap();
         f1_uint32_builder.append_value(1);
         // tbl.struct.tags
-        let f1_tags_list_builder = f1_builder.field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(3).unwrap();
-        let f1_tags_item_builder = f1_tags_list_builder.values().as_any_mut().downcast_mut::<StringBuilder>().unwrap();
+        let f1_tags_list_builder = f1_builder
+            .field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(3)
+            .unwrap();
+        let f1_tags_item_builder = f1_tags_list_builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<StringBuilder>()
+            .unwrap();
         f1_tags_item_builder.append_value("t1");
         f1_tags_item_builder.append_value("t2");
         f1_tags_list_builder.append(true);
@@ -501,18 +422,32 @@ mod tests {
         //         'int32', make_array(10, 20)
         //     )
         // ),
-        let f2_builder = row_builder.field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(2).unwrap();
-        let f2_item_builder = f2_builder.values().as_any_mut().downcast_mut::<StructBuilder>().unwrap();
+        let f2_builder = row_builder
+            .field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(2)
+            .unwrap();
+        let f2_item_builder = f2_builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<StructBuilder>()
+            .unwrap();
 
         //tbl.list_struct[].bools
-        let f2_item_bools_builder = f2_item_builder.field_builder::<BooleanBuilder>(0).unwrap();
+        let f2_item_bools_builder =
+            f2_item_builder.field_builder::<BooleanBuilder>(0).unwrap();
         f2_item_bools_builder.append_value(true);
         // tbl.list_struct[].uint32
-        let f2_item_uint32_builder = f2_item_builder.field_builder::<UInt32Builder>(1).unwrap();
+        let f2_item_uint32_builder =
+            f2_item_builder.field_builder::<UInt32Builder>(1).unwrap();
         f2_item_uint32_builder.append_value(5);
         // tbl.list_struct[].uint32
-        let f2_item_int32_list_builder = f2_item_builder.field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(2).unwrap();
-        let f2_item_int32_item_builder = f2_item_int32_list_builder.values().as_any_mut().downcast_mut::<Int32Builder>().unwrap();
+        let f2_item_int32_list_builder = f2_item_builder
+            .field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(2)
+            .unwrap();
+        let f2_item_int32_item_builder = f2_item_int32_list_builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .unwrap();
         f2_item_int32_item_builder.append_values(&[10, 20], &[true, true]);
         f2_item_int32_list_builder.append(true);
 
@@ -545,60 +480,82 @@ mod tests {
         let f3_uint32_builder = f3_builder.field_builder::<UInt32Builder>(1).unwrap();
         f3_uint32_builder.append_value(5);
         // tbl.named_struct.uint32
-        let f3_products_builder = f3_builder.field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(2).unwrap();
+        let f3_products_builder = f3_builder
+            .field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(2)
+            .unwrap();
         {
-            let f3_field_products_item_builder = f3_products_builder.values()
+            let f3_field_products_item_builder = f3_products_builder
+                .values()
                 .as_any_mut()
-                .downcast_mut::<StructBuilder>().unwrap();
-            let qty_builder = f3_field_products_item_builder.field_builder::<Int32Builder>(0).unwrap();
+                .downcast_mut::<StructBuilder>()
+                .unwrap();
+            let qty_builder = f3_field_products_item_builder
+                .field_builder::<Int32Builder>(0)
+                .unwrap();
             qty_builder.append_value(1);
-            let name_builder = f3_field_products_item_builder.field_builder::<StringBuilder>(1).unwrap();
+            let name_builder = f3_field_products_item_builder
+                .field_builder::<StringBuilder>(1)
+                .unwrap();
             name_builder.append_value("product1");
 
             f3_field_products_item_builder.append(true);
 
-            let f3_field_products_item_builder = f3_products_builder.values()
+            let f3_field_products_item_builder = f3_products_builder
+                .values()
                 .as_any_mut()
-                .downcast_mut::<StructBuilder>().unwrap();
-            let qty_builder = f3_field_products_item_builder.field_builder::<Int32Builder>(0).unwrap();
+                .downcast_mut::<StructBuilder>()
+                .unwrap();
+            let qty_builder = f3_field_products_item_builder
+                .field_builder::<Int32Builder>(0)
+                .unwrap();
             qty_builder.append_value(1);
-            let name_builder = f3_field_products_item_builder.field_builder::<StringBuilder>(1).unwrap();
+            let name_builder = f3_field_products_item_builder
+                .field_builder::<StringBuilder>(1)
+                .unwrap();
             name_builder.append_value("product1");
             f3_field_products_item_builder.append(true);
-
         }
         f3_products_builder.append(true);
         f3_builder.append(true);
 
         let f3_arr = f3_builder.finish();
 
-        let row =  StructArray::new(complete_schema.fields.clone(), vec![
-            // 1
-            Arc::new(f0_arr),
-            Arc::new(f1_arr),
-            Arc::new(f2_arr),
-            Arc::new(f3_arr),
-        ], None);
-        let initial_table = Arc::new(MemTable::try_new(complete_schema.clone(), vec![
-            vec![RecordBatch::from(row)]
-        ])?);
+        let row = StructArray::new(
+            complete_schema.fields.clone(),
+            vec![
+                // 1
+                Arc::new(f0_arr),
+                Arc::new(f1_arr),
+                Arc::new(f2_arr),
+                Arc::new(f3_arr),
+            ],
+            None,
+        );
+        let initial_table = Arc::new(MemTable::try_new(
+            complete_schema.clone(),
+            vec![vec![RecordBatch::from(row)]],
+        )?);
 
         ctx.register_table("tbl", initial_table.clone()).unwrap();
-        let df = ctx.sql(r#"
+        let df = ctx
+            .sql(
+                r#"
             select
                 get_field(struct1, 'tags') as tags,
                 get_field(array_element(list_struct, 0), 'int32') as f2
             from
                 tbl;
-        "#)
-            .await.unwrap();
+        "#,
+            )
+            .await
+            .unwrap();
 
         let df_plan = df.clone().logical_plan().clone();
         // info!("df_plan: {:?}", df_plan);
 
         let optimizer = Optimizer::with_rules(vec![Arc::new(OptimizeProjections::new())]);
         let optimized_plan =
-            optimizer.optimize(df_plan, &OptimizerContext::new(), |_, _|{})?;
+            optimizer.optimize(df_plan, &OptimizerContext::new(), |_, _| {})?;
         info!("df_plan: {:?}", optimized_plan);
 
         info!("logical = {}", logical_plan_str(&df));
@@ -606,6 +563,4 @@ mod tests {
         df.show().await?;
         Ok(())
     }
-
 }
-
