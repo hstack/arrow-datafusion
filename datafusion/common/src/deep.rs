@@ -9,7 +9,7 @@ use arrow_array::{
     MapArray, RecordBatch, RecordBatchOptions, StructArray,
 };
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
-use log::{error, info};
+use log::{error, trace};
 use parquet::schema::types::SchemaDescriptor;
 use std::cmp::min;
 use std::collections::HashMap;
@@ -371,8 +371,6 @@ pub fn try_rewrite_record_batch_with_mappings(
     dst: SchemaRef,
     mappings: Vec<Option<usize>>,
 ) -> crate::Result<RecordBatch> {
-    info!("mappings: {:?}", mappings);
-    info!("dst: {:#?}", dst.clone());
     let src_record_batch_cols = src_record_batch.columns().to_vec();
     let num_rows = src_record_batch.num_rows();
     let field_vecs = dst.fields()
@@ -520,7 +518,6 @@ pub fn splat_columns(
     projection: &Vec<usize>,
     projection_deep: &HashMap<usize, Vec<String>>,
 ) -> Vec<String> {
-    info!("DEEP: {:#?}", projection_deep);
     let mut out: Vec<String> = vec![];
     for pi in projection.iter() {
         let f = src.field(*pi);
@@ -583,7 +580,6 @@ pub fn rewrite_field_projection(
     projected_field_idx: usize,
     projection_deep: &HashMap<usize, Vec<String>>,
 ) -> FieldRef {
-    info!("rewrite_field_projection: ");
     let original_field = Arc::new(src.field(projected_field_idx).clone());
     let single_field_schema = Arc::new(Schema::new(vec![original_field]));
     // rewrite projection, deep projection to use 0
@@ -705,7 +701,6 @@ pub fn rewrite_schema(
         for i in 0..src_fields.len() {
             let src_field = src_fields[i].clone();
             let src_field_path = make_path(&parent, src_field.name());
-            // info!("rewrite fields: {} = {} {}", i, src_field_name, src_field_path);
 
             let field_path_included = path_included(filters, &src_field_path); //filters.contains(&src_field_path);
             if field_path_included {
@@ -714,7 +709,6 @@ pub fn rewrite_schema(
                 if data_type_recurs(src_field.data_type())
                     && path_prefix_exists(filters, &src_field_path)
                 {
-                    // info!("recurring for {}", src_field.name().clone());
                     match rewrite_schema_field(parent.clone(), src_field, filters) {
                         None => {}
                         Some(f) => out_fields.push(f),
@@ -722,7 +716,6 @@ pub fn rewrite_schema(
                 }
             }
         }
-        // info!("  returning {}", out_fields.len());
         out_fields
     }
 
@@ -733,11 +726,11 @@ pub fn rewrite_schema(
     ) -> Option<FieldRef> {
         let src_field_name = src_field.name();
         let src_field_path = make_path(&parent, src_field_name);
-        info!("rewrite field: {} = {} ({:?})", src_field_name, src_field_path, filters);
+        trace!(target:"deep", "rewrite field: {} = {} ({:?})", src_field_name, src_field_path, filters);
 
         let field_path_included = path_included(filters, &src_field_path); //filters.contains(&src_field_path);
         if field_path_included {
-            // info!("  return {} directly ", src_field_path);
+            trace!(target:"deep", "  return {} directly ", src_field_path);
             return Some(src_field.clone());
         } else {
             if data_type_recurs(src_field.data_type())
@@ -751,7 +744,7 @@ pub fn rewrite_schema(
                             filters,
                         )
                         .map(|inner| {
-                            // info!("return new list {} = {:#?}", src_field_name.clone(), inner.clone());
+                            trace!(target:"deep", "return new list {} = {:#?}", src_field_name.clone(), inner.clone());
                             Arc::new(Field::new_list(
                                 src_field.name(),
                                 inner,
@@ -796,7 +789,6 @@ pub fn rewrite_schema(
                                 filters,
                             )
                             .map(|inner| {
-                                info!("XXXXXXXXXXXXX");
                                 Arc::new(Field::new_map(
                                     src_field_name,
                                     map_entry.name().clone(),
@@ -814,9 +806,8 @@ pub fn rewrite_schema(
                     DataType::Struct(src_inner) => {
                         let dst_fields =
                             rewrite_schema_fields(src_field_path.clone(), src_inner, filters);
-                        // info!("for struct: {} {} = {:#?}", src_field_name, src_field_path.clone(), dst_fields);
+                        trace!(target:"deep", "for struct: {} {} = {:#?}", src_field_name, src_field_path.clone(), dst_fields);
                         if dst_fields.len() > 0 {
-                            // info!("return new struct");
                             Some(Arc::new(Field::new_struct(
                                 src_field.name(),
                                 dst_fields,
@@ -831,10 +822,8 @@ pub fn rewrite_schema(
                         panic!()
                     }
                 };
-                // info!("  returning after recurse: {:#?}", out);
                 out
             } else {
-                // info!("  returning none");
                 None
             }
         }
@@ -846,8 +835,8 @@ pub fn rewrite_schema(
         projection.clone()
     };
     let splatted = splat_columns(src.clone(), &actual_projection, &projection_deep);
-    info!("xx rewrite_schema source: {:#?}", src);
-    info!("xx rewrite_schema splatted: {:?} {:?} = {:?}", &actual_projection, &projection_deep, splatted);
+    trace!(target:"deep", "rewrite_schema source: {:#?}", src);
+    trace!(target:"deep", "rewrite_schema splatted: {:?} {:?} = {:?}", &actual_projection, &projection_deep, splatted);
     let mut dst_fields: Vec<FieldRef> = vec![];
     for pi in actual_projection.iter() {
         let src_field = src.field(*pi);
@@ -862,7 +851,7 @@ pub fn rewrite_schema(
     }
 
     // let dst_fields = rewrite_fields("".to_string(), src.clone().fields(), &splatted);
-    info!("rewrite_schema dst: {:#?}", dst_fields);
+    trace!(target:"deep", "rewrite_schema dst: {:#?}", dst_fields);
     if dst_fields.len() > 0 {
         return Arc::new(Schema::new_with_metadata(dst_fields, src.metadata.clone()));
     }
