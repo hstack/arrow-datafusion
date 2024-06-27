@@ -484,11 +484,16 @@ pub fn can_rewrite_field(
             }
         }
         (DataType::Map(src_inner, _), DataType::Map(dst_inner, _)) => {
-            return can_rewrite_field(
-                dst_inner.clone(),
-                src_inner.clone(),
-                fill_missing_source_fields,
-            );
+            return match (src_inner.data_type(), dst_inner.data_type()) {
+                (DataType::Struct(src_inner_f), DataType::Struct(dst_inner_f)) => {
+                    can_rewrite_field(
+                        dst_inner_f[1].clone(),
+                        src_inner_f[1].clone(),
+                        fill_missing_source_fields,
+                    )
+                }
+                _ => false
+            }
         }
         (DataType::Struct(src_inner), DataType::Struct(dst_inner)) => {
             return can_rewrite_fields(dst_inner, src_inner, fill_missing_source_fields);
