@@ -819,7 +819,7 @@ fn rewrite_projection_given_requirements(
     let exprs_used = indices.get_at_indices(&expr);
 
     let required_indices =
-        RequiredIndicies::new().with_exprs(input.schema(), exprs_used.iter())?;
+        indices.with_exprs_and_old_indices(input.schema(), &expr)?;
 
     trace!(target: "deep", "rewrite_projection_given_requirements: {:#?}", required_indices);
     trace!(target: "deep", "rewrite_projection_given_requirements: {:#?}", input);

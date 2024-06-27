@@ -110,7 +110,7 @@ impl RequiredIndicies {
         // Add indices of the child fields referred to by the expressions in the
         // parent
         plan.apply_expressions(|e| {
-            self.add_expr(schema, e)?;
+            self.add_expr(schema, e, None)?;
             Ok(TreeNodeRecursion::Continue)
         })?;
         Ok(self.compact())
@@ -125,7 +125,7 @@ impl RequiredIndicies {
     ///
     /// * `input_schema`: The input schema to analyze for index requirements.
     /// * `expr`: An expression for which we want to find necessary field indices.
-    fn add_expr(&mut self, input_schema: &DFSchemaRef, expr: &Expr) -> Result<()> {
+    fn add_expr(&mut self, input_schema: &DFSchemaRef, expr: &Expr, deep_indices: Option<&Vec<String>>) -> Result<()> {
         // TODO could remove these clones (and visit the expression directly)
         let mut cols = expr_to_deep_columns(expr);
         // Get outer-referenced (subquery) columns:
@@ -146,7 +146,15 @@ impl RequiredIndicies {
                 }
                 trace!(target: "deep", "fix_possible_field_accesses: {:?} {:?}", &rest, &new_rest);
                 self.indices.push(idx);
-                append_column::<usize>(&mut self.deep_indices, &idx, new_rest);
+                if let Some(parent_deep_indices) = deep_indices {
+                    for parent_index in parent_deep_indices {
+                        let mut child_rest = new_rest.clone();
+                        child_rest.push(parent_index.clone());
+                        append_column::<usize>(&mut self.deep_indices, &idx, child_rest);
+                    }
+                } else {
+                    append_column::<usize>(&mut self.deep_indices, &idx, new_rest);
+                }
             }
         }
         Ok(())
@@ -167,7 +175,24 @@ impl RequiredIndicies {
         exprs
             .into_iter()
             .try_fold(self, |mut acc, expr| {
-                acc.add_expr(schema, expr)?;
+                acc.add_expr(schema, expr, None)?;
+                Ok(acc)
+            })
+            .map(|acc| acc.compact())
+    }
+
+    pub fn with_exprs_and_old_indices<'a>(
+        self,
+        schema: &DFSchemaRef,
+        exprs: &[Expr],
+    ) -> Result<Self> {
+        let new_indices = RequiredIndicies::new();
+        self
+            .indices
+            .iter()
+            .map(|&idx| (exprs[idx].clone(), self.deep_indices.get(&idx)))
+            .try_fold(new_indices, |mut acc, (expr, deep_indices)| {
+                acc.add_expr(schema, &expr, deep_indices)?;
                 Ok(acc)
             })
             .map(|acc| acc.compact())

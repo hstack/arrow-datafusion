@@ -10,8 +10,6 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use log::{error, trace};
-use parquet::schema::types::SchemaDescriptor;
-use std::cmp::min;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -863,56 +861,7 @@ pub fn rewrite_schema(
     return src.clone();
 }
 
-pub fn generate_leaf_paths(
-    arrow_schema: SchemaRef,
-    parquet_schema: &SchemaDescriptor,
-    projection: &Vec<usize>,
-    projection_deep: &HashMap<usize, Vec<String>>,
-) -> Vec<usize> {
-    let actual_projection = if projection.len() == 0 {
-        (0..arrow_schema.fields().len()).collect()
-    } else {
-        projection.clone()
-    };
-    let splatted =
-        splat_columns(arrow_schema.clone(), &actual_projection, &projection_deep);
 
-    let mut out: Vec<usize> = vec![];
-    for (i, col) in parquet_schema.columns().iter().enumerate() {
-        let col_path = col.path();
-        let mut found = false;
-        for filter in splatted.iter() {
-            // check if this filter matches this leaf path
-            let filter_pieces = filter.split(".").collect::<Vec<&str>>();
-            let col_pieces = col_path.parts();
-            // let's check
-            let mut filter_found = true;
-            for i in 0..min(filter_pieces.len(), col_pieces.len()) {
-                if i >= filter_pieces.len() {
-                    //  we are at the end of the filter, and we matched until now, so we break, we match !
-                    break;
-                }
-                if i >= col_pieces.len() {
-                    // we have a longer filter, we matched until now, we match !
-                    break;
-                }
-                // we can actually check
-                if !(col_pieces[i] == filter_pieces[i] || filter_pieces[i] == "*") {
-                    filter_found = false;
-                    break;
-                }
-            }
-            if filter_found {
-                found = true;
-                break;
-            }
-        }
-        if found {
-            out.push(i);
-        }
-    }
-    out
-}
 
 #[cfg(test)]
 mod tests {
