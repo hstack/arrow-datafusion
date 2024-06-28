@@ -267,6 +267,10 @@ impl RequiredIndicies {
         F: Fn(usize) -> usize,
     {
         self.indices.iter_mut().for_each(|idx| *idx = f(*idx));
+        let reindex_deep: HashMap<_, _> = self.deep_indices.into_iter()
+            .map(|(k, v)| (f(k), v))
+            .collect();
+        self.deep_indices = reindex_deep;
         self
     }
 

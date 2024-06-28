@@ -260,9 +260,6 @@ fn generate_leaf_paths(
     projection: &Vec<usize>,
     projection_deep: &HashMap<usize, Vec<String>>,
 ) -> Vec<usize> {
-    info!(target: "TASE", "OPENER projection: {:?}", projection);
-    info!(target: "TASE", "OPENER projection deep: {:?}", projection_deep);
-
     let actual_projection = if projection.len() == 0 {
         (0..arrow_schema.fields().len()).collect()
     } else {
