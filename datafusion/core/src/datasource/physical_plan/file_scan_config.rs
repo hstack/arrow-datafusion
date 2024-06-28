@@ -37,7 +37,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, ColumnStatistics, DataFusionError, Statistics};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 
-use log::{info, warn};
+use log::{trace, warn};
 use datafusion_common::deep::rewrite_field_projection;
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
@@ -250,10 +250,10 @@ impl FileScanConfig {
                         self.file_schema.field(idx).clone()
                     }
                     Some(projection_deep) => {
-                        info!("FileScanConfig::project DEEP PROJECT");
+                        trace!("FileScanConfig::project DEEP PROJECT");
                         let field_arc = Arc::new(self.file_schema.field(idx).clone());
                         let rewritten_field_arc = rewrite_field_projection(self.file_schema.clone(), idx, &projection_deep);
-                        info!("FileScanConfig::project DEEP PROJECT {:#?}", rewritten_field_arc);
+                        trace!("FileScanConfig::project DEEP PROJECT {:#?}", rewritten_field_arc);
                         rewritten_field_arc.as_ref().clone()
                     }
                 };
