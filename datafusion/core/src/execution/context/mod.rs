@@ -1263,7 +1263,7 @@ impl SessionContext {
     }
 
     /// Register [`CatalogProviderList`] in [`SessionState`]
-    pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogProviderList>) {
+    pub fn register_catalog_list(&self, catalog_list: Arc<dyn CatalogProviderList>) {
         self.state.write().register_catalog_list(catalog_list)
     }
 
