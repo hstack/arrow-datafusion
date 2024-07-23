@@ -719,7 +719,7 @@ pub fn remap_join_projections_join_to_output(
 ) -> datafusion_common::Result<Option<Vec<usize>>> {
     match projection {
         Some(ref projection) => {
-            let (join_schema, indices) = build_join_schema(
+            let (join_schema, _indices) = build_join_schema(
                 left.schema().as_ref(),
                 right.schema().as_ref(),
                 join_type
@@ -736,9 +736,9 @@ pub fn remap_join_projections_join_to_output(
                 ProjectionMapping::try_new(&projection_exprs, &join_schema)?;
 
             // projection mapping contains from and to, get the second one
-            let dest_physical_exprs = projection_mapping.map.iter().map(|(f, t)| t.clone()).collect::<Vec<_>>();
+            let dest_physical_exprs = projection_mapping.map.iter().map(|(_f, t)| t.clone()).collect::<Vec<_>>();
             let dest_columns = dest_physical_exprs.iter().map(|pe| pe.as_any().downcast_ref::<Column>()).collect::<Vec<_>>();
-            let output = dest_physical_exprs.iter().enumerate().map(|(idx, pe)| {
+            let output = dest_physical_exprs.iter().enumerate().map(|(idx, _pe)| {
                 // :Vec<(Arc<dyn PhysicalExpr>, String)>
                 // (pe.clone(), dest_column.name().to_owned())
                 let dest_column = dest_columns.get(idx).unwrap().unwrap();
