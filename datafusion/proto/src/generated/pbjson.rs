@@ -5429,6 +5429,9 @@ impl serde::Serialize for FileScanExecConf {
         if !self.projection.is_empty() {
             len += 1;
         }
+        if !self.projection_deep.is_empty() {
+            len += 1;
+        }
         if self.limit.is_some() {
             len += 1;
         }
@@ -5453,6 +5456,9 @@ impl serde::Serialize for FileScanExecConf {
         }
         if !self.projection.is_empty() {
             struct_ser.serialize_field("projection", &self.projection)?;
+        }
+        if !self.projection_deep.is_empty() {
+            struct_ser.serialize_field("projectionDeep", &self.projection_deep)?;
         }
         if let Some(v) = self.limit.as_ref() {
             struct_ser.serialize_field("limit", v)?;
@@ -5483,6 +5489,8 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
             "fileGroups",
             "schema",
             "projection",
+            "projection_deep",
+            "projectionDeep",
             "limit",
             "statistics",
             "table_partition_cols",
@@ -5498,6 +5506,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
             FileGroups,
             Schema,
             Projection,
+            ProjectionDeep,
             Limit,
             Statistics,
             TablePartitionCols,
@@ -5527,6 +5536,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                             "fileGroups" | "file_groups" => Ok(GeneratedField::FileGroups),
                             "schema" => Ok(GeneratedField::Schema),
                             "projection" => Ok(GeneratedField::Projection),
+                            "projectionDeep" | "projection_deep" => Ok(GeneratedField::ProjectionDeep),
                             "limit" => Ok(GeneratedField::Limit),
                             "statistics" => Ok(GeneratedField::Statistics),
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
@@ -5554,6 +5564,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                 let mut file_groups__ = None;
                 let mut schema__ = None;
                 let mut projection__ = None;
+                let mut projection_deep__ = None;
                 let mut limit__ = None;
                 let mut statistics__ = None;
                 let mut table_partition_cols__ = None;
@@ -5581,6 +5592,15 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                                 Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
                                     .into_iter().map(|x| x.0).collect())
                             ;
+                        }
+                        GeneratedField::ProjectionDeep => {
+                            if projection_deep__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("projectionDeep"));
+                            }
+                            projection_deep__ = Some(
+                                map_.next_value::<std::collections::HashMap<::pbjson::private::NumberDeserialize<u32>, _>>()?
+                                    .into_iter().map(|(k,v)| (k.0, v)).collect()
+                            );
                         }
                         GeneratedField::Limit => {
                             if limit__.is_some() {
@@ -5618,6 +5638,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                     file_groups: file_groups__.unwrap_or_default(),
                     schema: schema__,
                     projection: projection__.unwrap_or_default(),
+                    projection_deep: projection_deep__.unwrap_or_default(),
                     limit: limit__,
                     statistics: statistics__,
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),

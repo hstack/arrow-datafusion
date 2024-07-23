@@ -175,6 +175,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_schema_register_listing_table() {
+        env_logger::init();
         let testdata = crate::test_util::parquet_test_data();
         let testdir = if testdata.starts_with('/') {
             format!("file://{testdata}")
@@ -211,7 +212,6 @@ mod tests {
             .sql("SELECT id, bool_col FROM cat.active.alltypes_plain")
             .await
             .unwrap();
-
         let actual = df.collect().await.unwrap();
 
         let expected = [

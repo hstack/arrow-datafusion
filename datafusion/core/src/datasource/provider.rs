@@ -18,6 +18,7 @@
 //! Data source traits
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -158,11 +159,11 @@ pub trait TableProvider: Sync + Send {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    async fn scan_with_exprs(
+    async fn scan_deep(
         &self,
         state: &SessionState,
         projection: Option<&Vec<usize>>,
-        _projection_exprs: &[Expr],
+        _projection_deep: Option<&HashMap<usize, Vec<String>>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
