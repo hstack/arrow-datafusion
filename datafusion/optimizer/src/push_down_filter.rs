@@ -2325,6 +2325,7 @@ mod tests {
                 (*test_provider.schema()).clone(),
             )?),
             projection: None,
+            projection_deep: None,
             source: Arc::new(test_provider),
             fetch: None,
         });
@@ -2397,6 +2398,7 @@ mod tests {
                 (*test_provider.schema()).clone(),
             )?),
             projection: Some(vec![0]),
+            projection_deep: Some(HashMap::new()),
             source: Arc::new(test_provider),
             fetch: None,
         });
@@ -2426,6 +2428,7 @@ mod tests {
                 (*test_provider.schema()).clone(),
             )?),
             projection: Some(vec![0]),
+            projection_deep: Some(HashMap::new()),
             source: Arc::new(test_provider),
             fetch: None,
         });
