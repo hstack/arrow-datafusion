@@ -27,6 +27,7 @@ mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
 mod statistics;
+pub mod flight;
 
 pub(crate) use self::csv::plan_to_csv;
 pub(crate) use self::json::plan_to_json;

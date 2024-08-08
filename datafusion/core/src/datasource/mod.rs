@@ -36,6 +36,7 @@ mod statistics;
 pub mod stream;
 pub mod streaming;
 pub mod view;
+pub mod flight;
 
 // backwards compatibility
 pub use datafusion_execution::object_store;
