@@ -630,6 +630,9 @@ config_namespace! {
 
         /// When set to true, the optimizer will not attempt to convert Union to Interleave
         pub prefer_existing_union: bool, default = false
+
+        /// force a hash join for single partition to appease ballista
+        pub force_multi_partition_for_hash_join: bool, default = false
     }
 }
 
