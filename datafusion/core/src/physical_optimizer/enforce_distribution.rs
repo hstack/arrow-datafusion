@@ -1089,6 +1089,7 @@ fn get_repartition_requirement_status(
     plan: &Arc<dyn ExecutionPlan>,
     batch_size: usize,
     should_use_estimates: bool,
+    force_multi_partition_for_hash_join: bool
 ) -> Result<Vec<RepartitionRequirementStatus>> {
     let mut needs_alignment = false;
     let children = plan.children();
@@ -1117,7 +1118,7 @@ fn get_repartition_requirement_status(
                 requirement,
                 roundrobin_beneficial,
                 roundrobin_beneficial_stats,
-                hash_necessary: is_hash && multi_partitions,
+                hash_necessary: (is_hash && multi_partitions) || force_multi_partition_for_hash_join, // HSTACK this fixes ballista tests true
             },
         ));
     }
@@ -1161,6 +1162,9 @@ fn ensure_distribution(
     let should_use_estimates = config
         .execution
         .use_row_number_estimates_to_optimize_partitioning;
+    let force_multi_partition_for_hash_join = config
+        .optimizer
+        .force_multi_partition_for_hash_join;
     let is_unbounded = dist_context.plan.execution_mode().is_unbounded();
     // Use order preserving variants either of the conditions true
     // - it is desired according to config
@@ -1194,7 +1198,7 @@ fn ensure_distribution(
     };
 
     let repartition_status_flags =
-        get_repartition_requirement_status(&plan, batch_size, should_use_estimates)?;
+        get_repartition_requirement_status(&plan, batch_size, should_use_estimates, force_multi_partition_for_hash_join)?;
     // This loop iterates over all the children to:
     // - Increase parallelism for every child if it is beneficial.
     // - Satisfy the distribution requirements of every child, if it is not

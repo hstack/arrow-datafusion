@@ -637,6 +637,9 @@ config_namespace! {
         /// then the output will be coerced to a non-view.
         /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
         pub expand_views_at_output: bool, default = false
+	
+        /// force a hash join for single partition to appease ballista
+        pub force_multi_partition_for_hash_join: bool, default = false
     }
 }
 
