@@ -19,7 +19,7 @@
 inherits = "dev"
 opt-level = 0
 debug = 2
-split-debuginfo = "packed"
+split-debuginfo = "unpacked"
 strip = "none"
 debug-assertions = true
 overflow-checks = false
