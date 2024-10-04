@@ -606,14 +606,17 @@ impl LogicalPlan {
                 table_name,
                 source,
                 projection,
+                projection_deep,
                 projected_schema,
                 filters,
                 fetch,
+                ..
             }) => filters.map_elements(f)?.update_data(|filters| {
                 LogicalPlan::TableScan(TableScan {
                     table_name,
                     source,
                     projection,
+                    projection_deep,
                     projected_schema,
                     filters,
                     fetch,

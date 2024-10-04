@@ -60,7 +60,7 @@ pub fn data_type_recurs(dt: &DataType) -> bool {
         DataType::LargeList(f) => data_type_recurs(f.data_type()),
         DataType::LargeListView(f) => data_type_recurs(f.data_type()),
         // list of struct
-        DataType::Map(f, _) => true,
+        DataType::Map(_, _) => true,
         DataType::Struct(_) => true,
     }
 }
@@ -108,7 +108,7 @@ pub fn rewrite_record_batch_fields(
                 out_arrays.push(tmp_array);
                 out_fields.push(dst_field);
             } else if error_on_missing_source_fields {
-                return Err(crate::DataFusionError::Internal(format!(
+                return Err(DataFusionError::Internal(format!(
                     "field {dst_name} not found in source"
                 )));
             }
@@ -537,7 +537,7 @@ pub fn has_deep_projection(possible: Option<&HashMap<usize, Vec<String>>>) -> bo
         return false;
     }
     let tmp = possible.unwrap();
-    !(tmp.is_empty() || tmp.iter().all(|(k, v)| v.len() == 0))
+    !(tmp.is_empty() || tmp.iter().all(|(_k, v)| v.len() == 0))
 }
 
 /// Combines the current projection (numeric indices of top-level columns) with
@@ -667,7 +667,7 @@ pub fn fix_possible_field_accesses(schema: &DFSchemaRef, field_idx: usize, rest:
                 (false, true, new_field)
             }
             DataType::Map(inner_map, _) => {
-                let mut new_field: Option<FieldRef> = None;
+                let new_field: Option<FieldRef>;
                 match inner_map.data_type() {
                     DataType::Struct(inner_map_struct) => {
                         new_field = Some(inner_map_struct[1].clone());
