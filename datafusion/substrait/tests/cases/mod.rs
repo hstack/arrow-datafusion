@@ -21,3 +21,5 @@ mod logical_plans;
 mod roundtrip_logical_plan;
 mod roundtrip_physical_plan;
 mod serialize;
+
+mod tree_node;
