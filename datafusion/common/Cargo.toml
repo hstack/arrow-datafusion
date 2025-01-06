@@ -66,6 +66,9 @@ sqlparser = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }
 
+prost = "0.13"
+substrait = { version = "0.50", features = ["serde"] }
+
 [target.'cfg(target_family = "wasm")'.dependencies]
 web-time = "1.1.0"
 
