@@ -40,6 +40,7 @@ use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use arrow_array::builder::UInt64Builder;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray};
 use arrow_buffer::ArrowNativeType;
+use arrow_schema::SchemaRef;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -47,7 +48,7 @@ use datafusion_common::{
     plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
 };
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_physical_expr::equivalence::add_offset_to_expr;
+use datafusion_physical_expr::equivalence::{add_offset_to_expr, ProjectionMapping};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::{collect_columns, merge_vectors};
 use datafusion_physical_expr::{
@@ -58,6 +59,7 @@ use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use hashbrown::raw::RawTable;
 use parking_lot::Mutex;
+use crate::common::can_project;
 
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 ///
@@ -698,6 +700,66 @@ pub fn build_join_schema(
         .chain(right.metadata().clone())
         .collect();
     (fields.finish().with_metadata(metadata), column_indices)
+}
+
+/// This assumes that the projections are relative to the join schema.
+/// We need to redo them to point to the actual hash join output schema
+pub fn remap_join_projections_join_to_output(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    join_type: &JoinType,
+    projection: Option<Vec<usize>>,
+) -> Result<Option<Vec<usize>>> {
+    match projection {
+        Some(ref projection) => {
+            let (join_schema, _) = build_join_schema(
+                left.schema().as_ref(),
+                right.schema().as_ref(),
+                join_type
+            );
+
+            let join_schema = Arc::new(join_schema);
+            can_project(&join_schema, Some(projection.clone()).as_ref())?;
+
+            let projection_exprs = project_index_to_exprs(
+                &projection.clone(),
+                &join_schema
+            );
+            let projection_mapping =
+                ProjectionMapping::try_new(&projection_exprs, &join_schema)?;
+
+            // projection mapping contains from and to, get the second one
+            let dest_physical_exprs = projection_mapping.map.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>();
+            let dest_columns = dest_physical_exprs.iter().map(|pe| pe.as_any().downcast_ref::<Column>()).collect::<Vec<_>>();
+            let output = dest_physical_exprs.iter().enumerate().map(|(idx, _)| {
+                // :Vec<(Arc<dyn PhysicalExpr>, String)>
+                // (pe.clone(), dest_column.name().to_owned())
+                let dest_column = dest_columns.get(idx).unwrap().unwrap();
+                dest_column.index()
+            }).collect::<Vec<_>>();
+            Ok(Some(output))
+        },
+        None => Ok(None)
+    }
+}
+
+pub fn project_index_to_exprs(
+    projection_index: &[usize],
+    schema: &SchemaRef,
+) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
+    projection_index
+        .iter()
+        .map(|index| {
+            let field = schema.field(*index);
+            (
+                Arc::new(Column::new(
+                    field.name(),
+                    *index,
+                )) as Arc<dyn PhysicalExpr>,
+                field.name().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>()
 }
 
 /// A [`OnceAsync`] runs an `async` closure once, where multiple calls to
