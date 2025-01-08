@@ -27,6 +27,8 @@ use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::plan_err;
 use std::fmt::Debug;
 use std::sync::Arc;
+use log::{error, info};
+use crate::datasource::schema_adapter_deep::NestedSchemaAdapter;
 
 /// Factory for creating [`SchemaAdapter`]
 ///
@@ -217,10 +219,16 @@ impl SchemaAdapterFactory for DefaultSchemaAdapterFactory {
         projected_table_schema: SchemaRef,
         table_schema: SchemaRef,
     ) -> Box<dyn SchemaAdapter> {
-        Box::new(DefaultSchemaAdapter {
+
+        // Box::new(DefaultSchemaAdapter {
+        //     projected_table_schema,
+        //     table_schema,
+        // })
+        Box::new(NestedSchemaAdapter {
             projected_table_schema,
             table_schema,
         })
+
     }
 }
 
@@ -275,6 +283,12 @@ impl SchemaAdapter for DefaultSchemaAdapter {
                         projection.push(file_idx);
                     }
                     false => {
+                        error!(
+                            "Cannot cast file schema field {} of type {:#?} to table schema field of type {:#?}",
+                            file_field.name(),
+                            file_field.data_type(),
+                            table_field.data_type()
+                        );
                         return plan_err!(
                             "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
                             file_field.name(),
