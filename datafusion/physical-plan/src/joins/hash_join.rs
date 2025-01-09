@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::{any::Any, vec};
 
-use super::utils::{asymmetric_join_output_partitioning, reorder_output_after_swap};
+use super::utils::{asymmetric_join_output_partitioning, project_index_to_exprs, remap_join_projections_join_to_output, swap_reverting_projection};
 use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
@@ -77,6 +77,7 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
+use crate::projection::ProjectionExec;
 
 type SharedBitmapBuilder = Mutex<BooleanBufferBuilder>;
 
@@ -611,7 +612,34 @@ impl HashJoinExec {
         {
             Ok(Arc::new(new_join))
         } else {
-            reorder_output_after_swap(Arc::new(new_join), &left.schema(), &right.schema())
+            // TODO avoid adding ProjectionExec again and again, only adding Final Projection
+            // ADR: FIXME the projection inside the hash join functionality is not consistent
+            // see https://github.com/apache/datafusion/commit/afddb321e9a98ffc1947005c38b6b50a6ef2a401
+            // Failing to do the below code will create a projection exec with a projection that is
+            // possibly outside the schema.
+            let actual_projection = if new_join.projection.is_some() {
+                let tmp = remap_join_projections_join_to_output(
+                    new_join.left().clone(),
+                    new_join.right().clone(),
+                    new_join.join_type(),
+                    new_join.projection.clone(),
+                )?.unwrap();
+                project_index_to_exprs(
+                    &tmp,
+                    &new_join.schema()
+                )
+            } else {
+                swap_reverting_projection(&left.schema(), &right.schema())
+            };
+            // let swap_proj = swap_reverting_projection(&left.schema(), &right.schema());
+
+            let proj = ProjectionExec::try_new(
+                actual_projection,
+                Arc::new(new_join),
+            )?;
+            Ok(Arc::new(proj))
+
+            // reorder_output_after_swap(Arc::new(new_join), &left.schema(), &right.schema())
         }
     }
 }
@@ -1641,11 +1669,11 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
-    use datafusion_physical_expr::PhysicalExpr;
 
     use hashbrown::raw::RawTable;
     use rstest::*;
     use rstest_reuse::*;
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
     fn div_ceil(a: usize, b: usize) -> usize {
         a.div_ceil(b)
