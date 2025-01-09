@@ -35,6 +35,7 @@ use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
 use datafusion_expr::{col, BinaryExpr, Case, Expr, Operator, SortExpr};
+use log::info;
 
 const CSE_PREFIX: &str = "__common_expr";
 
@@ -687,11 +688,24 @@ impl CSEController for ExprCSEController<'_> {
                 | Expr::Wildcard { .. }
         );
 
+        // ADR: Option 1 Fix get field screwing up the plan - this makes it so that get_field no longer breaks the plan
+        let mut is_get_field = false;
+        if true {
+            match node {
+                Expr::ScalarFunction(ScalarFunction {func, args}) => {
+                    if func.name() == "get_field" {
+                        is_get_field = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+
         let is_aggr = matches!(node, Expr::AggregateFunction(..));
 
         match self.mask {
-            ExprMask::Normal => is_normal_minus_aggregates || is_aggr,
-            ExprMask::NormalAndAggregates => is_normal_minus_aggregates,
+            ExprMask::Normal => is_get_field || is_normal_minus_aggregates || is_aggr,
+            ExprMask::NormalAndAggregates => is_get_field || is_normal_minus_aggregates,
         }
     }
 
