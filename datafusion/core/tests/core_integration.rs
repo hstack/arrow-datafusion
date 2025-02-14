@@ -42,6 +42,8 @@ mod custom_sources_cases;
 /// Run all tests that are found in the `optimizer` directory
 mod optimizer;
 
+mod optimizer_deep_indices;
+
 /// Run all tests that are found in the `physical_optimizer` directory
 mod physical_optimizer;
 
