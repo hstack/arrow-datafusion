@@ -2543,6 +2543,7 @@ mod tests {
                 (*test_provider.schema()).clone(),
             )?),
             projection,
+            projection_deep: None,
             source: Arc::new(test_provider),
             fetch: None,
         });
@@ -2610,14 +2611,26 @@ mod tests {
 
     #[test]
     fn multi_combined_filter() -> Result<()> {
-        let plan = table_scan_with_pushdown_provider_builder(
-            TableProviderFilterPushDown::Inexact,
-            vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
-            Some(vec![0]),
-        )?
-        .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
-        .project(vec![col("a"), col("b")])?
-        .build()?;
+        let test_provider = PushDownProvider {
+            filter_support: TableProviderFilterPushDown::Inexact,
+        };
+
+        let table_scan = LogicalPlan::TableScan(TableScan {
+            table_name: "test".into(),
+            filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
+            projected_schema: Arc::new(DFSchema::try_from(
+                (*test_provider.schema()).clone(),
+            )?),
+            projection: Some(vec![0]),
+            projection_deep: Some(HashMap::new()),
+            source: Arc::new(test_provider),
+            fetch: None,
+        });
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
+            .project(vec![col("a"), col("b")])?
+            .build()?;
 
         let expected = "Projection: a, b\
             \n  Filter: a = Int64(10) AND b > Int64(11)\
@@ -2628,14 +2641,26 @@ mod tests {
 
     #[test]
     fn multi_combined_filter_exact() -> Result<()> {
-        let plan = table_scan_with_pushdown_provider_builder(
-            TableProviderFilterPushDown::Exact,
-            vec![],
-            Some(vec![0]),
-        )?
-        .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
-        .project(vec![col("a"), col("b")])?
-        .build()?;
+        let test_provider = PushDownProvider {
+            filter_support: TableProviderFilterPushDown::Exact,
+        };
+
+        let table_scan = LogicalPlan::TableScan(TableScan {
+            table_name: "test".into(),
+            filters: vec![],
+            projected_schema: Arc::new(DFSchema::try_from(
+                (*test_provider.schema()).clone(),
+            )?),
+            projection: Some(vec![0]),
+            projection_deep: Some(HashMap::new()),
+            source: Arc::new(test_provider),
+            fetch: None,
+        });
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
+            .project(vec![col("a"), col("b")])?
+            .build()?;
 
         let expected = r#"
 Projection: a, b
