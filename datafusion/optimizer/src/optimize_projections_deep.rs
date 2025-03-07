@@ -12,7 +12,7 @@ use datafusion_expr::{
     build_join_schema, Expr, Join, LogicalPlan, Projection, Subquery, SubqueryAlias,
     TableScan, Union,
 };
-use log::{info, trace, warn};
+use log::{error, info, trace, warn};
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;

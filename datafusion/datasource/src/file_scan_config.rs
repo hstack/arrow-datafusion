@@ -31,6 +31,7 @@ use arrow::{
     buffer::Buffer,
     datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
 };
+use datafusion_common::deep::rewrite_field_projection;
 use datafusion_common::{exec_err, ColumnStatistics, Constraints, Result, Statistics};
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_execution::{
@@ -154,6 +155,9 @@ pub struct FileScanConfig {
     /// Columns on which to project the data. Indexes that are higher than the
     /// number of columns of `file_schema` refer to `table_partition_cols`.
     pub projection: Option<Vec<usize>>,
+    /// Columns on which to project the data. Indexes that are higher than the
+    /// number of columns of `file_schema` refer to `table_partition_cols`.
+    pub projection_deep: Option<HashMap<usize, Vec<String>>>,
     /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
@@ -321,6 +325,7 @@ impl FileScanConfig {
             constraints: Constraints::empty(),
             statistics,
             projection: None,
+            projection_deep: None,
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
@@ -419,6 +424,15 @@ impl FileScanConfig {
     /// Set the projection of the files
     pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
         self.projection = projection;
+        self
+    }
+
+    /// Set the projection of the files
+    pub fn with_projection_deep(
+        mut self,
+        projection_deep: Option<HashMap<usize, Vec<String>>>,
+    ) -> Self {
+        self.projection_deep = projection_deep;
         self
     }
 
