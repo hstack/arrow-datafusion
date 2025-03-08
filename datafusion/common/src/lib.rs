@@ -56,6 +56,8 @@ pub mod types;
 pub mod utils;
 pub mod deep;
 
+pub mod substrait_tree;
+
 /// Reexport arrow crate
 pub use arrow;
 pub use column::Column;
