@@ -52,6 +52,7 @@ pub mod eliminate_outer_join;
 pub mod extract_equijoin_predicate;
 pub mod filter_null_join_keys;
 pub mod optimize_projections;
+pub mod optimize_projections_deep;
 pub mod optimizer;
 pub mod propagate_empty_relation;
 pub mod push_down_filter;

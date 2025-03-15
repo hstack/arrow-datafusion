@@ -60,9 +60,11 @@ use datafusion_common::{
     UnnestOptions,
 };
 use indexmap::IndexSet;
+use log::trace;
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;
+use datafusion_common::deep::rewrite_schema;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
@@ -1743,6 +1745,7 @@ impl LogicalPlan {
                         ref source,
                         ref table_name,
                         ref projection,
+                        ref projection_deep,
                         ref filters,
                         ref fetch,
                         ..
@@ -1758,8 +1761,16 @@ impl LogicalPlan {
                             }
                             _ => "".to_string(),
                         };
+                        let projected_fields_deep = match projection_deep {
+                            Some(deep_indices) => {
+                                // breaks tests
+                                // format!(" projection_deep=[{:?}]", deep_indices)
+                                "".to_string()
+                            }
+                            _ => "".to_string(),
+                        };
 
-                        write!(f, "TableScan: {table_name}{projected_fields}")?;
+                        write!(f, "TableScan: {table_name}{projected_fields}{projected_fields_deep}")?;
 
                         if !filters.is_empty() {
                             let mut full_filter = vec![];
@@ -2506,6 +2517,8 @@ pub struct TableScan {
     pub source: Arc<dyn TableSource>,
     /// Optional column indices to use as a projection
     pub projection: Option<Vec<usize>>,
+    /// Optional column indices to use as a projection
+    pub projection_deep: Option<HashMap<usize, Vec<String>>>,
     /// The schema description of the output
     pub projected_schema: DFSchemaRef,
     /// Optional expressions to be used as filters by the table provider
@@ -2520,6 +2533,7 @@ impl Debug for TableScan {
             .field("table_name", &self.table_name)
             .field("source", &"...")
             .field("projection", &self.projection)
+            // .field("projection_deep", &self.projection_deep)
             .field("projected_schema", &self.projected_schema)
             .field("filters", &self.filters)
             .field("fetch", &self.fetch)
@@ -2627,10 +2641,108 @@ impl TableScan {
             table_name,
             source: table_source,
             projection,
+            projection_deep: None,
             projected_schema,
             filters,
             fetch,
         })
+    }
+
+    /// Initialize TableScan with appropriate schema from the given
+    /// arguments.
+    pub fn try_new_with_deep_projection(
+        table_name: impl Into<TableReference>,
+        table_source: Arc<dyn TableSource>,
+        projection: Option<Vec<usize>>,
+        projection_deep: Option<HashMap<usize, Vec<String>>>,
+        filters: Vec<Expr>,
+        fetch: Option<usize>,
+    ) -> Result<Self> {
+        trace!(target: "deep", "TableScan::try_new_with_deep_projection: {:#?}, {:#?}", projection, projection_deep);
+        let table_name = table_name.into();
+
+        if table_name.table().is_empty() {
+            return plan_err!("table_name cannot be empty");
+        }
+        let schema = table_source.schema();
+        let func_dependencies = FunctionalDependencies::new_from_constraints(
+            table_source.constraints(),
+            schema.fields.len(),
+        );
+        let projected_schema = projection
+            .as_ref()
+            .map(|p| {
+                let projected_func_dependencies =
+                    func_dependencies.project_functional_dependencies(p, p.len());
+
+                let df_schema = DFSchema::new_with_metadata(
+                    p.iter()
+                        .map(|i| {
+                            (Some(table_name.clone()), Arc::new(schema.field(*i).clone()))
+                        })
+                        .collect(),
+                    schema.metadata.clone(),
+                )?;
+                df_schema.with_functional_dependencies(projected_func_dependencies)
+            })
+            .unwrap_or_else(|| {
+                let df_schema =
+                    DFSchema::try_from_qualified_schema(table_name.clone(), &schema)?;
+                df_schema.with_functional_dependencies(func_dependencies)
+            })?;
+        let mut projected_schema = Arc::new(projected_schema);
+
+        // reproject for deep schema
+        if projection.is_some() && projection_deep.is_some() {
+            let projection_clone = projection.unwrap().clone();
+            let projection_deep_clone = projection_deep.unwrap().clone();
+            let mut new_projection_deep: HashMap<usize, Vec<String>> = HashMap::new();
+            projection_clone.iter().enumerate().for_each(|(ip, elp)| {
+                let empty_vec: Vec<String> = vec![];
+                let deep = projection_deep_clone.get(elp).or(Some(&empty_vec)).unwrap();
+                new_projection_deep.insert(ip, deep.clone());
+            });
+            let new_projection = (0..projection_clone.len()).collect::<Vec<usize>>();
+            let inner_projected_schema = projected_schema.inner().clone();
+            let new_inner_projected_schema = rewrite_schema(
+                inner_projected_schema,
+                &new_projection,
+                &new_projection_deep,
+            );
+            let mut new_projected_schema_df = DFSchema::new_with_metadata(
+                new_inner_projected_schema
+                    .fields()
+                    .iter()
+                    .map(|fi| (Some(table_name.clone()), fi.clone()))
+                    .collect(),
+                schema.metadata.clone(),
+            )?;
+            new_projected_schema_df = new_projected_schema_df
+                .with_functional_dependencies(
+                    projected_schema.functional_dependencies().clone(),
+                )?;
+            projected_schema = Arc::new(new_projected_schema_df);
+
+            Ok(Self {
+                table_name,
+                source: table_source,
+                projection: Some(projection_clone),
+                projection_deep: Some(projection_deep_clone),
+                projected_schema,
+                filters,
+                fetch,
+            })
+        } else {
+            Ok(Self {
+                table_name,
+                source: table_source,
+                projection,
+                projection_deep,
+                projected_schema,
+                filters,
+                fetch,
+            })
+        }
     }
 }
 
@@ -4309,6 +4421,7 @@ digraph {
             table_name: TableReference::bare("tab"),
             source: Arc::clone(&source) as Arc<dyn TableSource>,
             projection: None,
+            projection_deep: None,
             projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
@@ -4339,6 +4452,7 @@ digraph {
             table_name: TableReference::bare("tab"),
             source,
             projection: None,
+            projection_deep: None,
             projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,

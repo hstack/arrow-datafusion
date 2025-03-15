@@ -515,7 +515,7 @@ pub fn can_rewrite_field(
         }
         (_src, _dest) => {
             error!(
-                target: "deep",
+                target: "deepschema",
                 "  can_rewrite_field: Unhandled src dest field: src {}={:?}, dst {}={:?}",
                 src_field.name(),
                 src_field.data_type(),
@@ -642,8 +642,14 @@ pub fn rewrite_schema(
     projection: &Vec<usize>,
     projection_deep: &HashMap<usize, Vec<String>>,
 ) -> SchemaRef {
+    trace!(target: "deepschema", "rewrite_schema: projection={:?}, projection_deep={:?}, input schema={:#?}", projection, projection_deep, src);
+
+    const FLAG_PARENT_IS_LIST: u8 = 0x2;
+    const FLAG_PARENT_IS_MAP: u8 = 0x4;
+
     fn rewrite_schema_fields(
         parent: String,
+        parent_flags: u8,
         src_fields: &Fields,
         filters: &Vec<String>,
     ) -> Vec<FieldRef> {
@@ -651,15 +657,25 @@ pub fn rewrite_schema(
         for i in 0..src_fields.len() {
             let src_field = src_fields[i].clone();
             let src_field_path = make_path(&parent, src_field.name());
+            // trace!(target:"deep", "rewrite_schema_fields: parent={}, src_field_path={}, filters={:?}, field={:#?}", parent, src_field_path, filters, src_field);
+            trace!(target:"deepschema", "rewrite_schema_fields: parent={}, src_field_path={}, filters={:?}, parent_flags: {}", parent, src_field_path, filters, parent_flags);
 
             let field_path_included = path_included(filters, &src_field_path); //filters.contains(&src_field_path);
-            if field_path_included {
+            let mut field_path_with_star_included = false;
+            if parent_flags & FLAG_PARENT_IS_LIST > 0 {
+                let mut src_field_path_with_star = src_field_path.clone();
+                src_field_path_with_star.push_str(".*");
+                field_path_with_star_included =
+                    path_included(filters, &src_field_path_with_star);
+            }
+
+            if field_path_included || field_path_with_star_included {
                 out_fields.push(src_field.clone());
             } else {
                 if data_type_recurs(src_field.data_type())
                     && path_prefix_exists(filters, &src_field_path)
                 {
-                    match rewrite_schema_field(parent.clone(), src_field, filters) {
+                    match rewrite_schema_field(parent.clone(), 0, src_field, filters) {
                         None => {}
                         Some(f) => out_fields.push(f),
                     }
@@ -671,6 +687,7 @@ pub fn rewrite_schema(
 
     fn rewrite_schema_field(
         parent: String,
+        parent_flags: u8,
         src_field: FieldRef,
         filters: &Vec<String>,
     ) -> Option<FieldRef> {
@@ -679,17 +696,28 @@ pub fn rewrite_schema(
         //  if we already navigated to this field and the accessor is "*"
         //  that means we don't care about the field name
         //  RETEST THIS for lists
+        let comes_from_list_and_last_is_set = parent.len() > 0
+            && (parent.chars().last().unwrap() == '*' as char
+                && (parent_flags & FLAG_PARENT_IS_LIST) > 0);
+        let comes_from_map_and_last_is_set = parent.len() > 0
+            && (parent.chars().last().unwrap() == '*' as char
+                && (parent_flags & FLAG_PARENT_IS_MAP) > 0);
+
         let src_field_path =
-            if parent.len() > 0 && parent.chars().last().unwrap() == '*' as char {
+            if comes_from_list_and_last_is_set || comes_from_map_and_last_is_set {
+                let current_pieces = parent.split(".").collect::<Vec<_>>();
+                // let filter
                 parent.clone()
+                // make_path(&parent, src_field_name)
             } else {
                 make_path(&parent, src_field_name)
             };
-        trace!(target:"deep", "rewrite field: {} = {} ({:?})", src_field_name, src_field_path, filters);
-
+        // trace!(target:"deep", "rewrite_schema_field: src_field_name={}, src_field_path={}, filters={:?}, field={:#?}", src_field_name, src_field_path, filters, src_field);
+        trace!(target:"deepschema", "rewrite_schema_field: src_field_name={}, src_field_path={}, filters={:?}, parent_flags={}", src_field_name, src_field_path, filters, parent_flags);
+        trace!(target:"deepschema", "rewrite_schema_field: src_field_type={:?}", &src_field.data_type());
         let field_path_included = path_included(filters, &src_field_path); //filters.contains(&src_field_path);
         if field_path_included {
-            trace!(target:"deep", "  return {} directly ", src_field_path);
+            trace!(target:"deepschema", "  rewrite_schema_field  return {} directly ", src_field_path);
             return Some(src_field.clone());
         } else {
             if data_type_recurs(src_field.data_type())
@@ -699,43 +727,46 @@ pub fn rewrite_schema(
                     DataType::List(src_inner) => {
                         rewrite_schema_field(
                             make_path(&src_field_path, "*"),
+                            FLAG_PARENT_IS_LIST,
                             src_inner.clone(),
                             filters,
                         )
+                            .map(|inner| {
+                                trace!(target:"deepschema", "return new list {} = {:#?}", src_field_name.clone(), inner.clone());
+                                Arc::new(Field::new_list(
+                                    src_field.name(),
+                                    inner,
+                                    src_field.is_nullable(),
+                                ))
+                            })
+                    }
+                    DataType::FixedSizeList(src_inner, src_sz) => rewrite_schema_field(
+                        make_path(&src_field_path, "*"),
+                        FLAG_PARENT_IS_LIST,
+                        src_inner.clone(),
+                        filters,
+                    )
                         .map(|inner| {
-                            trace!(target:"deep", "return new list {} = {:#?}", src_field_name.clone(), inner.clone());
-                            Arc::new(Field::new_list(
+                            Arc::new(Field::new_fixed_size_list(
+                                src_field.name(),
+                                inner,
+                                *src_sz,
+                                src_field.is_nullable(),
+                            ))
+                        }),
+                    DataType::LargeList(src_inner) => rewrite_schema_field(
+                        make_path(&src_field_path, "*"),
+                        FLAG_PARENT_IS_LIST,
+                        src_inner.clone(),
+                        filters,
+                    )
+                        .map(|inner| {
+                            Arc::new(Field::new_large_list(
                                 src_field.name(),
                                 inner,
                                 src_field.is_nullable(),
                             ))
-                        })
-                    }
-                    DataType::FixedSizeList(src_inner, src_sz) => rewrite_schema_field(
-                        make_path(&src_field_path, "*"),
-                        src_inner.clone(),
-                        filters,
-                    )
-                    .map(|inner| {
-                        Arc::new(Field::new_fixed_size_list(
-                            src_field.name(),
-                            inner,
-                            *src_sz,
-                            src_field.is_nullable(),
-                        ))
-                    }),
-                    DataType::LargeList(src_inner) => rewrite_schema_field(
-                        make_path(&src_field_path, "*"),
-                        src_inner.clone(),
-                        filters,
-                    )
-                    .map(|inner| {
-                        Arc::new(Field::new_large_list(
-                            src_field.name(),
-                            inner,
-                            src_field.is_nullable(),
-                        ))
-                    }),
+                        }),
 
                     DataType::Map(map_entry, map_sorted) => {
                         if let DataType::Struct(map_entry_fields) = map_entry.data_type()
@@ -744,19 +775,20 @@ pub fn rewrite_schema(
                             let map_value_field = map_entry_fields.get(1).unwrap();
                             rewrite_schema_field(
                                 make_path(&src_field_path, "*"),
+                                FLAG_PARENT_IS_MAP,
                                 map_value_field.clone(),
                                 filters,
                             )
-                            .map(|inner| {
-                                Arc::new(Field::new_map(
-                                    src_field_name,
-                                    map_entry.name().clone(),
-                                    map_key_field.clone(),
-                                    inner,
-                                    *map_sorted,
-                                    src_field.is_nullable(),
-                                ))
-                            })
+                                .map(|inner| {
+                                    Arc::new(Field::new_map(
+                                        src_field_name,
+                                        map_entry.name().clone(),
+                                        map_key_field.clone(),
+                                        inner,
+                                        *map_sorted,
+                                        src_field.is_nullable(),
+                                    ))
+                                })
                         } else {
                             panic!("Invalid internal field map: expected struct, but got {}", map_entry.data_type());
                         }
@@ -764,8 +796,8 @@ pub fn rewrite_schema(
 
                     DataType::Struct(src_inner) => {
                         let dst_fields =
-                            rewrite_schema_fields(src_field_path.clone(), src_inner, filters);
-                        trace!(target:"deep", "for struct: {} {} = {:#?}", src_field_name, src_field_path.clone(), dst_fields);
+                            rewrite_schema_fields(src_field_path.clone(), parent_flags, src_inner, filters);
+                        trace!(target:"deepschema", "for struct: {} {} = {:#?}", src_field_name, src_field_path.clone(), dst_fields);
                         if dst_fields.len() > 0 {
                             Some(Arc::new(Field::new_struct(
                                 src_field.name(),
@@ -795,13 +827,17 @@ pub fn rewrite_schema(
     let splatted = splat_columns(src.clone(), &actual_projection, &projection_deep);
 
     // trace!(target:"deep", "rewrite_schema source: {:#?}", src);
-    trace!(target:"deep", "rewrite_schema splatted: {:?} {:?} = {:?}", &actual_projection, &projection_deep, splatted);
+    trace!(target:"deepschema", "rewrite_schema splatted: {:?} {:?} = {:?}", &actual_projection, &projection_deep, splatted);
     let mut dst_fields: Vec<FieldRef> = vec![];
     for pi in actual_projection.iter() {
         let src_field = src.field(*pi);
-        trace!(target:"deep", "rewrite_schema at field {}", src_field.name());
-        let foutopt =
-            rewrite_schema_field("".to_string(), Arc::new(src_field.clone()), &splatted);
+        trace!(target:"deepschema", "rewrite_schema at field {}, splatted={:?}", src_field.name(), &splatted);
+        let foutopt = rewrite_schema_field(
+            "".to_string(),
+            0,
+            Arc::new(src_field.clone()),
+            &splatted,
+        );
         match foutopt {
             None => {}
             Some(fout) => {
@@ -811,7 +847,7 @@ pub fn rewrite_schema(
     }
 
     // let dst_fields = rewrite_fields("".to_string(), src.clone().fields(), &splatted);
-    // trace!(target:"deep", "rewrite_schema dst: {:#?}", dst_fields);
+    trace!(target:"deepschema", "rewrite_schema dst_fields: {:#?}", dst_fields);
 
     let output = if dst_fields.len() > 0 {
         Arc::new(Schema::new_with_metadata(dst_fields, src.metadata.clone()))
