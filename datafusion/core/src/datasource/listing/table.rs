@@ -958,6 +958,118 @@ impl TableProvider for ListingTable {
             .await
     }
 
+    async fn scan_deep(
+        &self,
+        state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        projection_deep: Option<&HashMap<usize, Vec<String>>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // extract types of partition columns
+        let table_partition_cols = self
+            .options
+            .table_partition_cols
+            .iter()
+            .map(|col| Ok(self.table_schema.field_with_name(&col.0)?.clone()))
+            .collect::<Result<Vec<_>>>()?;
+
+        let table_partition_col_names = table_partition_cols
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        // If the filters can be resolved using only partition cols, there is no need to
+        // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
+        let (partition_filters, filters): (Vec<_>, Vec<_>) =
+            filters.iter().cloned().partition(|filter| {
+                can_be_evaluted_for_partition_pruning(&table_partition_col_names, filter)
+            });
+        // TODO (https://github.com/apache/datafusion/issues/11600) remove downcast_ref from here?
+        let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
+
+        // We should not limit the number of partitioned files to scan if there are filters and limit
+        // at the same time. This is because the limit should be applied after the filters are applied.
+        let statistic_file_limit = if filters.is_empty() { limit } else { None };
+
+        let (mut partitioned_file_lists, statistics) = self
+            .list_files_for_scan(session_state, &partition_filters, statistic_file_limit)
+            .await?;
+
+        // if no files need to be read, return an `EmptyExec`
+        if partitioned_file_lists.is_empty() {
+            let projected_schema = project_schema(&self.schema(), projection)?;
+            return Ok(Arc::new(EmptyExec::new(projected_schema)));
+        }
+
+        let output_ordering = self.try_create_output_ordering()?;
+        match state
+            .config_options()
+            .execution
+            .split_file_groups_by_statistics
+            .then(|| {
+                output_ordering.first().map(|output_ordering| {
+                    FileScanConfig::split_groups_by_statistics(
+                        &self.table_schema,
+                        &partitioned_file_lists,
+                        output_ordering,
+                    )
+                })
+            })
+            .flatten()
+        {
+            Some(Err(e)) => log::debug!("failed to split file groups by statistics: {e}"),
+            Some(Ok(new_groups)) => {
+                if new_groups.len() <= self.options.target_partitions {
+                    partitioned_file_lists = new_groups;
+                } else {
+                    log::debug!("attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered")
+                }
+            }
+            None => {} // no ordering required
+        };
+
+        let filters = match conjunction(filters.to_vec()) {
+            Some(expr) => {
+                let table_df_schema = self.table_schema.as_ref().clone().to_dfschema()?;
+                let filters = create_physical_expr(
+                    &expr,
+                    &table_df_schema,
+                    state.execution_props(),
+                )?;
+                Some(filters)
+            }
+            None => None,
+        };
+
+        let Some(object_store_url) =
+            self.table_paths.first().map(ListingTableUrl::object_store)
+        else {
+            return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
+        };
+
+        // create the execution plan
+        self.options
+            .format
+            .create_physical_plan(
+                session_state,
+                FileScanConfig::new(
+                    object_store_url,
+                    Arc::clone(&self.file_schema),
+                    self.options.format.file_source(),
+                )
+                .with_file_groups(partitioned_file_lists)
+                .with_constraints(self.constraints.clone())
+                .with_statistics(statistics)
+                .with_projection(projection.cloned())
+                .with_projection_deep(projection_deep.cloned())
+                .with_limit(limit)
+                .with_output_ordering(output_ordering)
+                .with_table_partition_cols(table_partition_cols),
+                filters.as_ref(),
+            )
+            .await
+    }
+
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],

@@ -233,8 +233,8 @@ impl ParquetExecBuilder {
         }
 
         let base_config = file_scan_config.with_source(Arc::new(parquet.clone()));
-        debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
-        base_config.file_groups, base_config.projection, predicate, base_config.limit);
+        debug!("Creating ParquetExec, files: {:?}, projection {:?}, projection deep {:?}, predicate: {:?}, limit: {:?}",
+        base_config.file_groups, base_config.projection, base_config.projection_deep, predicate, base_config.limit);
 
         ParquetExec {
             inner: DataSourceExec::new(Arc::new(base_config.clone())),
