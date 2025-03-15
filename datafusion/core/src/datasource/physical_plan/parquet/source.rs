@@ -17,6 +17,7 @@
 
 //! ParquetSource implementation for reading parquet files
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -39,7 +40,7 @@ use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 use datafusion_physical_plan::DisplayFormatType;
 
 use itertools::Itertools;
-use log::debug;
+use log::{debug, trace};
 use object_store::ObjectStore;
 
 /// Execution plan for reading one or more Parquet files.
@@ -469,6 +470,28 @@ impl FileSource for ParquetSource {
         let projection = base_config
             .file_column_projection_indices()
             .unwrap_or_else(|| (0..base_config.file_schema.fields().len()).collect());
+
+        let projection_deep = match &base_config.projection_deep {
+            None => HashMap::new(),
+            Some(pd) => {
+                let mut out: HashMap<usize, Vec<String>> = HashMap::new();
+                for npi in &projection {
+                    match pd.get(npi) {
+                        None => {}
+                        Some(v) => {
+                            out.insert(*npi, v.clone());
+                        }
+                    }
+                }
+                out
+            }
+        };
+        trace!(
+            "ParquetExec::execute projection={:#?}, projection_deep={:#?}",
+            &projection,
+            &projection_deep
+        );
+
         let schema_adapter_factory = self
             .schema_adapter_factory
             .clone()
@@ -482,6 +505,7 @@ impl FileSource for ParquetSource {
         Arc::new(ParquetOpener {
             partition_index: partition,
             projection: Arc::from(projection),
+            projection_deep: Arc::new(projection_deep),
             batch_size: self
                 .batch_size
                 .expect("Batch size must set before creating ParquetOpener"),
