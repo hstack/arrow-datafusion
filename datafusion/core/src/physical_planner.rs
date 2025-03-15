@@ -90,6 +90,7 @@ use datafusion_physical_plan::unnest::ListUnnest;
 
 use crate::schema_equivalence::schema_satisfied_by;
 use async_trait::async_trait;
+use datafusion_common::deep::can_rewrite_schema;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
@@ -442,6 +443,7 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::TableScan(TableScan {
                 source,
                 projection,
+                projection_deep,
                 filters,
                 fetch,
                 ..
@@ -452,7 +454,13 @@ impl DefaultPhysicalPlanner {
                 // referred to in the query
                 let filters = unnormalize_cols(filters.iter().cloned());
                 source
-                    .scan(session_state, projection.as_ref(), &filters, *fetch)
+                    .scan_deep(
+                        session_state,
+                        projection.as_ref(),
+                        projection_deep.as_ref(),
+                        &filters,
+                        *fetch,
+                    )
                     .await?
             }
             LogicalPlan::Values(Values { values, schema }) => {
@@ -651,11 +659,23 @@ impl DefaultPhysicalPlanner {
                 let logical_input_schema = input.as_ref().schema();
                 let physical_input_schema_from_logical = logical_input_schema.inner();
 
+                let normal_schema_satisfied_by = schema_satisfied_by(
+                    physical_input_schema_from_logical,
+                    &physical_input_schema,
+                );
+                let deep_schema_is_satisfied =
+                    if options.optimizer.deep_column_pruning_flags > 0 {
+                        can_rewrite_schema(
+                            physical_input_schema_from_logical,
+                            &physical_input_schema,
+                            false,
+                        )
+                    } else {
+                        false
+                    };
+
                 if !options.execution.skip_physical_aggregate_schema_check
-                    && !schema_satisfied_by(
-                        physical_input_schema_from_logical,
-                        &physical_input_schema,
-                    )
+                    && !(normal_schema_satisfied_by || deep_schema_is_satisfied)
                 {
                     let mut differences = Vec::new();
                     if physical_input_schema.fields().len()
