@@ -17,6 +17,7 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
@@ -492,7 +493,16 @@ pub fn parse_protobuf_file_scan_config(
     } else {
         Some(projection)
     };
-
+    let projection_deep = proto
+        .projection_deep
+        .iter()
+        .map(|(i, cols)| (*i as usize, cols.columns.clone()))
+        .collect::<HashMap<_, _>>();
+    let projection_deep = if projection_deep.is_empty() {
+        None
+    } else {
+        Some(projection_deep)
+    };
     let constraints = convert_required!(proto.constraints)?;
     let statistics = convert_required!(proto.statistics)?;
 
@@ -542,6 +552,7 @@ pub fn parse_protobuf_file_scan_config(
         .with_constraints(constraints)
         .with_statistics(statistics)
         .with_projection(projection)
+        .with_projection_deep(projection_deep)
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_table_partition_cols(table_partition_cols)
         .with_output_ordering(output_ordering);
