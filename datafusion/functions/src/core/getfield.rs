@@ -16,13 +16,13 @@
 // under the License.
 
 use arrow::array::{
-    make_array, make_comparator, Array, BooleanArray, Capacities, MutableArrayData,
-    Scalar,
+    make_array, make_comparator, Array, BooleanArray, Capacities, ListArray,
+    MutableArrayData, Scalar,
 };
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use arrow_buffer::NullBuffer;
-use datafusion_common::cast::{as_map_array, as_struct_array};
+use datafusion_common::cast::{as_list_array, as_map_array, as_struct_array};
 use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, utils::take_function_args, Result,
     ScalarValue,
@@ -34,6 +34,8 @@ use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
+
+pub const HANDLE_STRUCT_IN_LIST: bool = true;
 
 #[user_doc(
     doc_section(label = "Other Functions"),
@@ -138,6 +140,19 @@ impl ScalarUDFImpl for GetFieldFunc {
         debug_assert_eq!(args.scalar_arguments.len(), 2);
 
         match (&args.arg_types[0], args.scalar_arguments[1].as_ref()) {
+            (DataType::List(field), Some(ScalarValue::Utf8(Some(field_name)))) => {
+                if HANDLE_STRUCT_IN_LIST {
+                    if let DataType::Struct(fields) = field.data_type() {
+                        fields.iter().find(|f| f.name() == field_name)
+                            .ok_or(plan_datafusion_err!("Field {field_name} not found in struct"))
+                            .map(|f| ReturnInfo::new_nullable(DataType::List(f.clone())))
+                    } else {
+                        exec_err!("Expected a List of Structs")
+                    }
+                } else {
+                    exec_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {}", &args.arg_types[0])
+                }
+            }
             (DataType::Map(fields, _), _) => {
                 match fields.data_type() {
                     DataType::Struct(fields) if fields.len() == 2 => {
@@ -184,6 +199,39 @@ impl ScalarUDFImpl for GetFieldFunc {
                 );
             }
         };
+
+        pub fn get_field_from_list(
+            array: Arc<dyn Array>,
+            field_name: &str,
+        ) -> Result<ColumnarValue> {
+            let list_array = as_list_array(array.as_ref())?;
+            match list_array.value_type() {
+                DataType::Struct(fields) => {
+                    let struct_array =
+                        as_struct_array(list_array.values()).or_else(|_| {
+                            exec_err!("Expected a StructArray inside the ListArray")
+                        })?;
+                    let Some(field_index) =
+                        fields.iter().position(|f| f.name() == field_name)
+                    else {
+                        return exec_err!("Field {field_name} not found in struct");
+                    };
+                    let projection_array = struct_array.column(field_index);
+
+                    let (_, offsets, _, nulls) = list_array.clone().into_parts();
+
+                    let new_list = ListArray::new(
+                        fields[field_index].clone(),
+                        offsets,
+                        projection_array.to_owned(),
+                        nulls,
+                    );
+
+                    Ok(ColumnarValue::Array(Arc::new(new_list)))
+                }
+                _ => exec_err!("Expected a ListArray of Structs"),
+            }
+        }
 
         fn process_map_array(
             array: Arc<dyn Array>,
@@ -235,6 +283,20 @@ impl ScalarUDFImpl for GetFieldFunc {
         }
 
         match (array.data_type(), name) {
+            (DataType::List(field), ScalarValue::Utf8(Some(k))) => {
+                if HANDLE_STRUCT_IN_LIST {
+                    if let DataType::Struct(_) = field.data_type() {
+                        get_field_from_list(array, &k)
+                    } else {
+                        exec_err!("Expected a List of Structs")
+                    }
+                } else {
+                    exec_err!(
+                        "get_field is only possible on maps with utf8 indexes or struct \
+                                         with utf8 indexes."
+                    )
+                }
+            }
             (DataType::Map(_, _), ScalarValue::List(arr)) => {
                 let key_array: Arc<dyn Array> = arr;
                 process_map_array(array, key_array)
