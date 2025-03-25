@@ -1498,7 +1498,7 @@ pub struct FileScanExecConf {
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(uint32, repeated, tag = "4")]
     pub projection: ::prost::alloc::vec::Vec<u32>,
-    /// FIXME abusively using projection columns to serialize map<u32, vec<string>>
+    /// FIXME somewhat abusively using ProjectionColumns to serialize map<u32, vec<string>>
     #[prost(map = "uint32, message", tag = "20")]
     pub projection_deep: ::std::collections::HashMap<u32, ProjectionColumns>,
     #[prost(message, optional, tag = "5")]
@@ -1813,6 +1813,8 @@ pub struct CoalesceBatchesExecNode {
 pub struct CoalescePartitionsExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(uint32, optional, tag = "2")]
+    pub fetch: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalHashRepartition {
