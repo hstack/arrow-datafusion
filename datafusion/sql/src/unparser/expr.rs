@@ -594,6 +594,13 @@ impl Unparser<'_> {
                 ast::Expr::CompoundIdentifier(idents) => idents,
                 other => return internal_err!("expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}", other),
             },
+            Expr::ScalarFunction(ScalarFunction { func, args }) if func.name() == "get_field" => {
+                if let ast::Expr::CompoundIdentifier(idents) = self.get_field_to_sql(args)? {
+                    idents
+                } else {
+                    unreachable!()
+                }
+            },
             _ => return internal_err!("get_field expects first argument to be column, but received: {:?}", &args[0]),
         };
 
