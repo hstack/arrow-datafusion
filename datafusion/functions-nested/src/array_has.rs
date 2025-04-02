@@ -220,6 +220,8 @@ fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
     let values = haystack.values();
     let is_nested = values.data_type().is_nested();
     let offsets = haystack.value_offsets();
+    let nulls = haystack.nulls();
+
     // If first argument is empty list (second argument is non-null), return false
     // i.e. array_has([], non-null element) -> false
     if values.len() == 0 {
@@ -234,9 +236,15 @@ fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
         let start = offset[0].to_usize().unwrap();
         let end = offset[1].to_usize().unwrap();
         let length = end - start;
-        // For non-nested list, length is 0 for null
+        // For non-nested list, check null vs empty
+        // otherwise array_has on [] returns null instead of false
         if length == 0 {
-            continue;
+            if let Some(nulls) = nulls {
+                if nulls.is_null(i) {
+                    continue;
+                }
+            }
+            final_contained[i] = Some(false);
         }
         let sliced_array = eq_array.slice(start, length);
         final_contained[i] = Some(sliced_array.true_count() > 0);

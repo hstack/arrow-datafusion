@@ -63,6 +63,7 @@ AS VALUES
   (make_array(make_array(5, 6),make_array(7, 8)), make_array(7.7, 8.8, 9.9), make_array('d', NULL, 'l', 'o', 'r')),
   (make_array(make_array(7, NULL),make_array(9, 10)), make_array(10.1, NULL, 12.2), make_array('s', 'i', 't')),
   (NULL, make_array(13.3, 14.4, 15.5), make_array('a', 'm', 'e', 't')),
+  (NULL, make_array(), make_array('a', 'm', 'e', 't')),
   (make_array(make_array(11, 12),make_array(13, 14)), NULL, make_array(',')),
   (make_array(make_array(15, 16),make_array(NULL, 18)), make_array(16.6, 17.7, 18.8), NULL)
 ;
@@ -709,6 +710,7 @@ List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int6
 List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 # arrays table
 query ???
@@ -719,6 +721,7 @@ select column1, column2, column3 from arrays;
 [[5, 6], [7, 8]] [7.7, 8.8, 9.9] [d, NULL, l, o, r]
 [[7, NULL], [9, 10]] [10.1, NULL, 12.2] [s, i, t]
 NULL [13.3, 14.4, 15.5] [a, m, e, t]
+NULL [] [a, m, e, t]
 [[11, 12], [13, 14]] NULL [,]
 [[15, 16], [NULL, 18]] [16.6, 17.7, 18.8] NULL
 
@@ -844,6 +847,7 @@ select column1[2], column2[3], column3[1] from arrays;
 [7, 8] 9.9 d
 [9, 10] 12.2 s
 NULL 15.5 a
+NULL NULL a
 [13, 14] NULL ,
 [NULL, 18] 18.8 NULL
 
@@ -851,6 +855,7 @@ NULL 15.5 a
 query ?RT
 select column1[0], column2[0], column3[0] from arrays;
 ----
+NULL NULL NULL
 NULL NULL NULL
 NULL NULL NULL
 NULL NULL NULL
@@ -868,6 +873,7 @@ select column1[-2], column2[-3], column3[-1] from arrays;
 [5, 6] 7.7 r
 [7, NULL] 10.1 t
 NULL 13.3 t
+NULL NULL t
 [11, 12] NULL ,
 [15, 16] 16.6 NULL
 
@@ -879,6 +885,7 @@ select column1[9 - 7], column2[2 * 0], column3[1 - 3] from arrays;
 [5, 6] NULL u
 [7, 8] NULL o
 [9, 10] NULL i
+NULL NULL e
 NULL NULL e
 [13, 14] NULL NULL
 [NULL, 18] NULL NULL
@@ -951,6 +958,7 @@ select column1[2:4], column2[1:4], column3[3:4] from arrays;
 [[7, 8]] [7.7, 8.8, 9.9] [l, o]
 [[9, 10]] [10.1, NULL, 12.2] [t]
 NULL [13.3, 14.4, 15.5] [e, t]
+NULL [] [e, t]
 [[13, 14]] NULL []
 [[NULL, 18]] [16.6, 17.7, 18.8] NULL
 
@@ -963,6 +971,7 @@ select column1[0:5], column2[0:3], column3[0:9] from arrays;
 [[5, 6], [7, 8]] [7.7, 8.8, 9.9] [d, NULL, l, o, r]
 [[7, NULL], [9, 10]] [10.1, NULL, 12.2] [s, i, t]
 NULL [13.3, 14.4, 15.5] [a, m, e, t]
+NULL [] [a, m, e, t]
 [[11, 12], [13, 14]] NULL [,]
 [[15, 16], [NULL, 18]] [16.6, 17.7, 18.8] NULL
 
@@ -1027,6 +1036,7 @@ select column1[2:4:2], column2[1:4:2], column3[3:4:2] from arrays;
 [[7, 8]] [7.7, 9.9] [l]
 [[9, 10]] [10.1, 12.2] [t]
 NULL [13.3, 15.5] [e]
+NULL [] [e]
 [[13, 14]] NULL []
 [[NULL, 18]] [16.6, 18.8] NULL
 
@@ -1039,6 +1049,7 @@ select column1[0:5:2], column2[0:3:2], column3[0:9:2] from arrays;
 [[5, 6]] [7.7, 9.9] [d, l, r]
 [[7, NULL]] [10.1, 12.2] [s, t]
 NULL [13.3, 15.5] [a, e]
+NULL [] [a, e]
 [[11, 12]] NULL [,]
 [[15, 16]] [16.6, 18.8] NULL
 
@@ -2488,6 +2499,7 @@ select array_append(column2, 100.1), array_append(column3, '.') from arrays;
 [7.7, 8.8, 9.9, 100.1] [d, NULL, l, o, r, .]
 [10.1, NULL, 12.2, 100.1] [s, i, t, .]
 [13.3, 14.4, 15.5, 100.1] [a, m, e, t, .]
+[100.1] [a, m, e, t, .]
 [100.1] [,, .]
 [16.6, 17.7, 18.8, 100.1] [.]
 
@@ -2499,6 +2511,7 @@ select array_append(column2, 100.1), array_append(column3, '.') from large_array
 [7.7, 8.8, 9.9, 100.1] [d, NULL, l, o, r, .]
 [10.1, NULL, 12.2, 100.1] [s, i, t, .]
 [13.3, 14.4, 15.5, 100.1] [a, m, e, t, .]
+[100.1] [a, m, e, t, .]
 [100.1] [,, .]
 [16.6, 17.7, 18.8, 100.1] [.]
 
@@ -2743,6 +2756,7 @@ select array_prepend(100.1, column2), array_prepend('.', column3) from arrays;
 [100.1, 7.7, 8.8, 9.9] [., d, NULL, l, o, r]
 [100.1, 10.1, NULL, 12.2] [., s, i, t]
 [100.1, 13.3, 14.4, 15.5] [., a, m, e, t]
+[100.1] [., a, m, e, t]
 [100.1] [., ,]
 [100.1, 16.6, 17.7, 18.8] [.]
 
@@ -2754,6 +2768,7 @@ select array_prepend(100.1, column2), array_prepend('.', column3) from large_arr
 [100.1, 7.7, 8.8, 9.9] [., d, NULL, l, o, r]
 [100.1, 10.1, NULL, 12.2] [., s, i, t]
 [100.1, 13.3, 14.4, 15.5] [., a, m, e, t]
+[100.1] [., a, m, e, t]
 [100.1] [., ,]
 [100.1, 16.6, 17.7, 18.8] [.]
 
@@ -3112,6 +3127,7 @@ select array_concat(column1, column1), array_concat(column2, column2), array_con
 [[5, 6], [7, 8], [5, 6], [7, 8]] [7.7, 8.8, 9.9, 7.7, 8.8, 9.9] [d, NULL, l, o, r, d, NULL, l, o, r]
 [[7, NULL], [9, 10], [7, NULL], [9, 10]] [10.1, NULL, 12.2, 10.1, NULL, 12.2] [s, i, t, s, i, t]
 NULL [13.3, 14.4, 15.5, 13.3, 14.4, 15.5] [a, m, e, t, a, m, e, t]
+NULL [] [a, m, e, t, a, m, e, t]
 [[11, 12], [13, 14], [11, 12], [13, 14]] NULL [,, ,]
 [[15, 16], [NULL, 18], [15, 16], [NULL, 18]] [16.6, 17.7, 18.8, 16.6, 17.7, 18.8] NULL
 
@@ -3124,6 +3140,7 @@ select array_concat(column1, make_array(make_array(1, 2), make_array(3, 4))), ar
 [[5, 6], [7, 8], [1, 2], [3, 4]] [7.7, 8.8, 9.9, 1.1, 2.2, 3.3]
 [[7, NULL], [9, 10], [1, 2], [3, 4]] [10.1, NULL, 12.2, 1.1, 2.2, 3.3]
 [[1, 2], [3, 4]] [13.3, 14.4, 15.5, 1.1, 2.2, 3.3]
+[[1, 2], [3, 4]] [1.1, 2.2, 3.3]
 [[11, 12], [13, 14], [1, 2], [3, 4]] [1.1, 2.2, 3.3]
 [[15, 16], [NULL, 18], [1, 2], [3, 4]] [16.6, 17.7, 18.8, 1.1, 2.2, 3.3]
 
@@ -3135,6 +3152,7 @@ select array_concat(column3, make_array('.', '.', '.')) from arrays;
 [i, p, NULL, u, m, ., ., .]
 [d, NULL, l, o, r, ., ., .]
 [s, i, t, ., ., .]
+[a, m, e, t, ., ., .]
 [a, m, e, t, ., ., .]
 [,, ., ., .]
 [., ., .]
@@ -4544,6 +4562,7 @@ NULL 0
 #NULL 0
 
 # cardinality with columns
+# FIXME cardinality on empty array should be NULL or zero?
 query III
 select cardinality(column1), cardinality(column2), cardinality(column3) from arrays;
 ----
@@ -4552,6 +4571,7 @@ select cardinality(column1), cardinality(column2), cardinality(column3) from arr
 4 3 5
 4 3 3
 NULL 3 4
+NULL NULL 4
 4 NULL 1
 4 3 NULL
 
@@ -4563,6 +4583,7 @@ select cardinality(column1), cardinality(column2), cardinality(column3) from lar
 4 3 5
 4 3 3
 NULL 3 4
+NULL NULL 4
 4 NULL 1
 4 3 NULL
 
@@ -5233,6 +5254,7 @@ select array_dims(column1), array_dims(column2), array_dims(column3) from arrays
 [2, 2] [3] [5]
 [2, 2] [3] [3]
 NULL [3] [4]
+NULL NULL [4]
 [2, 2] NULL [1]
 [2, 2] [3] NULL
 
@@ -5244,6 +5266,7 @@ select array_dims(column1), array_dims(column2), array_dims(column3) from large_
 [2, 2] [3] [5]
 [2, 2] [3] [3]
 NULL [3] [4]
+NULL NULL [4]
 [2, 2] NULL [1]
 [2, 2] [3] NULL
 
@@ -5400,6 +5423,7 @@ select array_ndims(column1), array_ndims(column2), array_ndims(column3) from arr
 2 1 1
 2 1 1
 NULL 1 1
+NULL 1 1
 2 NULL 1
 2 1 NULL
 
@@ -5410,6 +5434,7 @@ select array_ndims(column1), array_ndims(column2), array_ndims(column3) from lar
 2 1 1
 2 1 1
 2 1 1
+NULL 1 1
 NULL 1 1
 2 NULL 1
 2 1 NULL
@@ -5732,6 +5757,7 @@ true false true false
 true false false true
 false true false false
 NULL NULL false false
+NULL NULL false false
 false false NULL false
 false false false NULL
 
@@ -5746,6 +5772,7 @@ false false false true
 true false true false
 true false false true
 false true false false
+NULL NULL false false
 NULL NULL false false
 false false NULL false
 false false false NULL
@@ -7068,27 +7095,29 @@ false
 #NULL
 
 # empty scalar function #5
-query B
-select empty(column1) from arrays;
+query BB
+select empty(column1), empty(column2) from arrays;
 ----
-false
-false
-false
-false
-NULL
-false
-false
+false false
+false false
+false false
+false false
+NULL false
+NULL true
+false NULL
+false false
 
-query B
-select empty(arrow_cast(column1, 'LargeList(List(Int64))')) from arrays;
+query BB
+select empty(arrow_cast(column1, 'LargeList(List(Int64))')), empty(arrow_cast(column2, 'LargeList(Int64)')) from arrays;
 ----
-false
-false
-false
-false
-NULL
-false
-false
+false false
+false false
+false false
+false false
+NULL false
+NULL true
+false NULL
+false false
 
 query B
 select empty(column1) from fixed_size_arrays;
