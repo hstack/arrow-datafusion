@@ -249,7 +249,7 @@ fn optimize_projections(
                 projection,
                 filters,
                 fetch,
-                projected_schema: _,
+                projected_schema: _, ..
             } = table_scan;
 
             // Get indices referred to in the original (schema with all fields)

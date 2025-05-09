@@ -78,9 +78,9 @@ impl SchemaAdapter for NestedSchemaAdapter {
     ) -> datafusion_common::Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
         // self.map_schema_nested(file_schema.fields())
         //     .map(|(s, v)| (s as Arc<dyn SchemaMapper>, v))
-        trace!(target: "deep", "map_schema:           file_schema: {:#?}", file_schema);
-        trace!(target: "deep", "map_schema:           table_schema: {:#?}", self.table_schema);
-        trace!(target: "deep", "map_schema: projected_table_schema: {:#?}", self.projected_table_schema);
+        // trace!(target: "deep", "map_schema:           file_schema: {:#?}", file_schema);
+        // trace!(target: "deep", "map_schema:           table_schema: {:#?}", self.table_schema);
+        // trace!(target: "deep", "map_schema: projected_table_schema: {:#?}", self.projected_table_schema);
 
         let mut projection = Vec::with_capacity(file_schema.fields().len());
         let mut field_mappings = vec![None; self.projected_table_schema.fields().len()];
