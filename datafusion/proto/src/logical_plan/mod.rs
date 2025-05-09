@@ -268,6 +268,7 @@ fn from_table_source(
         table_name,
         source: target,
         projection: None,
+        projection_deep: None,
         projected_schema,
         filters: vec![],
         fetch: None,

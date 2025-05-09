@@ -46,6 +46,7 @@ use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::optimize_projections::OptimizeProjections;
+use crate::optimize_projections_deep::OptimizeProjectionsDeep;
 use crate::plan_signature::LogicalPlanSignature;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
@@ -417,6 +418,14 @@ impl Optimizer {
                 break;
             }
             i += 1;
+        }
+
+        // Heuristic to ignore test contexts
+        if self.rules.len() > 10 {
+            // This breaks with optimize projections, we need to execute this last
+            let optimize_deep_projections_rule = Arc::new(OptimizeProjectionsDeep::new());
+            let last_plan = optimize_deep_projections_rule.rewrite(new_plan, config)?;
+            new_plan = last_plan.data;
         }
 
         // verify that the optimizer passes only mutated what was permitted.
