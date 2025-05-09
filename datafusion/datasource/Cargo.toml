@@ -74,6 +74,12 @@ zstd = { version = "0.13", optional = true, default-features = false }
 [dev-dependencies]
 criterion = { workspace = true }
 tempfile = { workspace = true }
+datafusion = { workspace = true, features = ["nested_expressions"] }
+datafusion-optimizer = { workspace = true }
+datafusion-catalog = { workspace = true }
+parquet = { workspace = true }
+env_logger = { workspace = true }
+
 
 [lints]
 workspace = true
