@@ -17,6 +17,7 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;

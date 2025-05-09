@@ -45,7 +45,7 @@ mod optimizer;
 /// Run all tests that are found in the `physical_optimizer` directory
 mod physical_optimizer;
 
-// mod optimizer_deep_indices;
+mod optimizer_deep_indices;
 
 
 /// Run all tests that are found in the `serde` directory
