@@ -16,6 +16,9 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Fields, Schema};
+use datafusion_common::deep::can_rewrite_field;
+use log::info;
+use std::sync::Arc;
 
 /// Verifies whether the original planned schema can be satisfied with data
 /// adhering to the candidate schema. In practice, this is equality check on the
@@ -37,10 +40,24 @@ fn fields_satisfied_by(original: &Fields, candidate: &Fields) -> bool {
 
 /// See [`schema_satisfied_by`] for the contract.
 fn field_satisfied_by(original: &Field, candidate: &Field) -> bool {
-    original.name() == candidate.name()
+    let plain_match = original.name() == candidate.name()
         && (original.is_nullable() || !candidate.is_nullable())
         && original.metadata() == candidate.metadata()
-        && data_type_satisfied_by(original.data_type(), candidate.data_type())
+        && data_type_satisfied_by(original.data_type(), candidate.data_type());
+
+    let deep_match = can_rewrite_field(
+        &Arc::new(original.clone()),
+        &Arc::new(candidate.clone()),
+        false,
+    );
+    info!(
+        "field satisfied by {} = {}, plain={}, deep={}",
+        original.name(),
+        candidate.name(),
+        plain_match,
+        deep_match
+    );
+    plain_match || deep_match
 }
 
 /// See [`schema_satisfied_by`] for the contract.
