@@ -232,8 +232,18 @@ pub(crate) fn try_collect_left(
 
     match (left_can_collect, right_can_collect) {
         (true, true) => {
+            // Simple heuristic that will trigger a swap if the join is on the left,
+            // to obtain the "right deep tree"
+            // FIXME: this should rather be fixed by pushing stats through joins as we do for filter
+            let join_on_left = left.exists(|p| {
+                Ok(p.as_any()
+                    .downcast_ref::<HashJoinExec>()
+                    .filter(|p| p.mode == PartitionMode::CollectLeft)
+                    .is_some())
+            });
+
             if hash_join.join_type().supports_swap()
-                && should_swap_join_order(&**left, &**right)?
+                && (should_swap_join_order(&**left, &**right)? || join_on_left?)
             {
                 Ok(Some(hash_join.swap_inputs(PartitionMode::CollectLeft)?))
             } else {
