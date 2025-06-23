@@ -4131,6 +4131,7 @@ mod tests {
     /// Create a test table scan with uppercase column names for case sensitivity testing
     fn test_table_scan_with_uppercase_columns() -> Result<LogicalPlan> {
         let schema = Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
             Field::new("A", DataType::UInt32, false),
             Field::new("B", DataType::UInt32, false),
             Field::new("C", DataType::UInt32, false),
@@ -4154,6 +4155,26 @@ mod tests {
             @r"
         Aggregate: groupBy=[[test.A]], aggr=[[sum(test.B) AS total_salary]]
           TableScan: test, full_filters=[test.A > Int64(10)]
+        "
+        )
+    }
+
+    #[test]
+    fn filter_agg_mix_case_insensitive() -> Result<()> {
+        let table_scan = test_table_scan_with_uppercase_columns()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![sum(col(r#""B""#)).alias("total_salary")],
+            )?
+            .filter(col("a").gt(lit(10i64)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[sum(test.B) AS total_salary]]
+          TableScan: test, full_filters=[test.a > Int64(10)]
         "
         )
     }
